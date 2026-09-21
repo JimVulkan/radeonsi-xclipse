@@ -52,9 +52,9 @@ Currently, the driver works only on the Xclipse 920. Other models are not compat
 
 | Property | Environment | Effect |
 |---|---|---|
-| | `MESA_LOADER_DRIVER_OVERRIDE` | `radeonsi` selects this driver |
+|-----| `MESA_LOADER_DRIVER_OVERRIDE` | `radeonsi` selects this driver |
 | `debug.mesa_xclipse_present_probe` | `MESA_XCLIPSE_PRESENT_PROBE` | `n` logs what every n-th presented frame contains |
-| `debug.mesa_xclipse_hnd_dump` | | `1` logs each window buffer's gralloc handle |
+| `debug.mesa_xclipse_hnd_dump` |-----| `1` logs each window buffer's gralloc handle |
 
 ## Disclaimer
 
