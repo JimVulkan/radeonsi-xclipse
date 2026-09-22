@@ -24,6 +24,10 @@
  *   9  occlusion        samples-passed query around a quad of known size
  *  10  msaa             4x renderbuffer, one triangle, blit-resolve
  *  11  terrain          Minecraft terrain.fsh sampling (sampleNearest -> textureGrad) on an atlas
+ *  12  astc             2x2 blocks of ASTC 4x4 (void-extent colours), UNORM, then sRGB
+ *  13  etc2             2x2 blocks of ETC2 RGB8 (individual mode, known colours)
+ *  14  astc3d           sliced 3D ASTC 4x4: two slices of 2x2 blocks, the second one sampled
+ *  15  discard          discarded fragments must not write depth (cutout grass in front of water)
  *
  * Driver selection comes from the environment (MESA_LOADER_DRIVER_OVERRIDE=radeonsi).
  */
@@ -105,6 +109,8 @@ static PFNEGLGETPLATFORMDISPLAYEXTPROC p_eglGetPlatformDisplayEXT;
    X(PFNGLGENTEXTURESPROC, glGenTextures)                                                          \
    X(PFNGLBINDTEXTUREPROC, glBindTexture)                                                          \
    X(PFNGLTEXIMAGE2DPROC, glTexImage2D)                                                            \
+   X(PFNGLCOMPRESSEDTEXIMAGE2DPROC, glCompressedTexImage2D)                                        \
+   X(PFNGLCOMPRESSEDTEXIMAGE3DPROC, glCompressedTexImage3D)                                        \
    X(PFNGLTEXPARAMETERIPROC, glTexParameteri)                                                      \
    X(PFNGLACTIVETEXTUREPROC, glActiveTexture)                                                      \
    X(PFNGLGETUNIFORMLOCATIONPROC, glGetUniformLocation)                                            \
@@ -116,6 +122,7 @@ static PFNEGLGETPLATFORMDISPLAYEXTPROC p_eglGetPlatformDisplayEXT;
    X(PFNGLDISABLEPROC, glDisable)                                                                  \
    X(PFNGLBLENDFUNCPROC, glBlendFunc)                                                              \
    X(PFNGLDEPTHFUNCPROC, glDepthFunc)                                                              \
+   X(PFNGLDEPTHMASKPROC, glDepthMask)                                                              \
    X(PFNGLDISPATCHCOMPUTEPROC, glDispatchCompute)                                                  \
    X(PFNGLMEMORYBARRIERPROC, glMemoryBarrier)                                                      \
    X(PFNGLGENQUERIESPROC, glGenQueries)                                                            \
@@ -516,6 +523,61 @@ static int t_blend(void)
    return bad + gl_err("blend");
 }
 
+/* Near quad (z=-0.5, green) over the whole target, drawn first with depth writes, but its fragment
+ * shader discards the left half; then a far quad (z=0.5, red) without depth writes, like
+ * Minecraft's water behind cutout grass. Discarded fragments must not write depth. */
+static void e_discard(int x, int y, uint8_t o[4])
+{
+   (void)y;
+   const int left = x < W / 2;
+   o[0] = left ? 255 : 0;
+   o[1] = left ? 0 : 255;
+   o[2] = 0;
+   o[3] = 255;
+}
+
+static int t_discard(void)
+{
+   struct fbo f;
+   if (!fbo_create(&f, GL_RGBA8, 1, 1))
+      return 1;
+   char fs[256];
+   snprintf(fs, sizeof(fs),
+            "#version 330 core\nin vec4 col;\nout vec4 c;\n"
+            "void main() { if (col.g > 0.5 && gl_FragCoord.x < %d.0) discard; c = col; }\n", W / 2);
+   GLuint p = program("#version 330 core\n"
+                      "layout(location=0) in vec3 pos;\n"
+                      "out vec4 col;\n"
+                      "void main() { col = pos.z < 0.0 ? vec4(0,1,0,1) : vec4(1,0,0,1);"
+                      " gl_Position = vec4(pos, 1.0); }\n",
+                      fs, NULL);
+   if (!p)
+      return 1;
+   const float v[] = {
+      -1, -1, -0.5f, 1, -1, -0.5f, -1, 1, -0.5f, 1, -1, -0.5f, 1, 1, -0.5f, -1, 1, -0.5f,
+      -1, -1, 0.5f, 1, -1, 0.5f, -1, 1, 0.5f, 1, -1, 0.5f, 1, 1, 0.5f, -1, 1, 0.5f,
+   };
+   set_verts(v, sizeof(v) / sizeof(v[0]));
+   glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, 0);
+   glEnableVertexAttribArray(0);
+   glClearColor(0, 0, 0, 1);
+   glClearDepth(1.0);
+   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+   glEnable(GL_DEPTH_TEST);
+   glDepthFunc(GL_LESS);
+   glUseProgram(p);
+   glDrawArrays(GL_TRIANGLES, 0, 6);
+   glDepthMask(GL_FALSE);
+   glDrawArrays(GL_TRIANGLES, 6, 6);
+   glDepthMask(GL_TRUE);
+   glDisable(GL_DEPTH_TEST);
+   readback();
+   int r = gl_err("discard") + verify("discard", e_discard, 1);
+   glDeleteProgram(p);
+   fbo_destroy(&f);
+   return r;
+}
+
 /* Far quad (z=0.5, red) everywhere, near quad (z=-0.5, green) on the left half, drawn first. */
 static void e_depth(int x, int y, uint8_t o[4])
 {
@@ -809,6 +871,145 @@ static int t_terrain(void)
    return r;
 }
 
+/* Compressed formats: a 2x2-block texture, each block one known colour, drawn nearest over the
+ * whole target, so each quarter of it must be its block's colour. */
+static uint8_t cmp_want[4][4];
+
+static void e_cmp(int x, int y, uint8_t o[4])
+{
+   memcpy(o, cmp_want[(y >= H / 2) * 2 + (x >= W / 2)], 4);
+}
+
+static int draw_compressed(const char *what, GLenum fmt, const uint8_t *data, int size, int tol)
+{
+   GLuint t;
+   glGenTextures(1, &t);
+   glActiveTexture(GL_TEXTURE0);
+   glBindTexture(GL_TEXTURE_2D, t);
+   glCompressedTexImage2D(GL_TEXTURE_2D, 0, fmt, 8, 8, 0, size, data);
+   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+   int r = gl_err(what);
+   struct fbo f;
+   if (!fbo_create(&f, GL_RGBA8, 0, 1))
+      return 1;
+   GLuint p = program("#version 330 core\nlayout(location=0) in vec2 pos;\nout vec2 uv;\n"
+                      "void main() { uv = pos * 0.5 + 0.5; gl_Position = vec4(pos, 0.0, 1.0); }\n",
+                      "#version 330 core\nuniform sampler2D s;\nin vec2 uv;\nout vec4 c;\n"
+                      "void main() { c = texture(s, uv); }\n",
+                      NULL);
+   if (!p)
+      return 1;
+   static const float quad[] = {-1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1};
+   set_verts(quad, 12);
+   glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, 0);
+   glEnableVertexAttribArray(0);
+   glUseProgram(p);
+   glUniform1i(glGetUniformLocation(p, "s"), 0);
+   glDrawArrays(GL_TRIANGLES, 0, 6);
+   readback();
+   r += gl_err(what) + verify(what, e_cmp, tol);
+   glDeleteProgram(p);
+   fbo_destroy(&f);
+   glDeleteTextures(1, &t);
+   return r;
+}
+
+/* ASTC void-extent block: a constant RGBA16 colour. */
+static void astc_const(uint8_t *b, uint16_t r, uint16_t g, uint16_t bl, uint16_t a)
+{
+   static const uint8_t head[8] = {0xfc, 0xfd, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
+   memcpy(b, head, 8);
+   const uint16_t c[4] = {r, g, bl, a};
+   for (int i = 0; i < 4; i++) {
+      b[8 + 2 * i] = c[i] & 0xff;
+      b[9 + 2 * i] = c[i] >> 8;
+   }
+}
+
+static int t_astc(void)
+{
+   uint8_t d[4 * 16];
+   astc_const(d + 0, 0xffff, 0, 0, 0xffff);
+   astc_const(d + 16, 0, 0xffff, 0, 0xffff);
+   astc_const(d + 32, 0, 0, 0xffff, 0xffff);
+   astc_const(d + 48, 0x8080, 0x8080, 0x8080, 0x8080);
+   static const uint8_t unorm[4][4] = {{255, 0, 0, 255}, {0, 255, 0, 255}, {0, 0, 255, 255},
+                                       {128, 128, 128, 128}};
+   memcpy(cmp_want, unorm, sizeof(unorm));
+   int r = draw_compressed("astc 4x4 unorm", 0x93B0 /* GL_COMPRESSED_RGBA_ASTC_4x4_KHR */, d,
+                           sizeof(d), 1);
+   /* sRGB: 0x80 decodes to linear 0.2158 -> 55; alpha stays linear. */
+   static const uint8_t srgb[4][4] = {{255, 0, 0, 255}, {0, 255, 0, 255}, {0, 0, 255, 255},
+                                      {55, 55, 55, 128}};
+   memcpy(cmp_want, srgb, sizeof(srgb));
+   r += draw_compressed("astc 4x4 srgb", 0x93D0 /* GL_COMPRESSED_SRGB8_ALPHA8_ASTC_4x4_KHR */, d,
+                        sizeof(d), 2);
+   return r;
+}
+
+/* ETC2 RGB8 individual mode, both halves one 4-bit colour, table 0, all indices 0: every texel is
+ * the colour expanded to 8 bits plus 2. */
+static int t_etc2(void)
+{
+   static const uint8_t d[4 * 8] = {
+      0xff, 0x00, 0x00, 0, 0, 0, 0, 0, /* red   -> 255, 2, 2 */
+      0x00, 0xff, 0x00, 0, 0, 0, 0, 0, /* green -> 2, 255, 2 */
+      0x00, 0x00, 0xff, 0, 0, 0, 0, 0, /* blue  -> 2, 2, 255 */
+      0x88, 0x88, 0x88, 0, 0, 0, 0, 0, /* grey  -> 138 */
+   };
+   static const uint8_t want[4][4] = {{255, 2, 2, 255}, {2, 255, 2, 255}, {2, 2, 255, 255},
+                                      {138, 138, 138, 255}};
+   memcpy(cmp_want, want, sizeof(want));
+   return draw_compressed("etc2 rgb8", 0x9274 /* GL_COMPRESSED_RGB8_ETC2 */, d, sizeof(d), 1);
+}
+
+/* Sliced 3D ASTC: slice 0 all black, slice 1 the four colours; sample at r = 0.75 (slice 1). */
+static int t_astc3d(void)
+{
+   uint8_t d[8 * 16];
+   for (int i = 0; i < 4; i++)
+      astc_const(d + 16 * i, 0, 0, 0, 0xffff);
+   astc_const(d + 64, 0xffff, 0, 0, 0xffff);
+   astc_const(d + 80, 0, 0xffff, 0, 0xffff);
+   astc_const(d + 96, 0, 0, 0xffff, 0xffff);
+   astc_const(d + 112, 0x8080, 0x8080, 0x8080, 0x8080);
+   static const uint8_t want[4][4] = {{255, 0, 0, 255}, {0, 255, 0, 255}, {0, 0, 255, 255},
+                                      {128, 128, 128, 128}};
+   memcpy(cmp_want, want, sizeof(want));
+   GLuint t;
+   glGenTextures(1, &t);
+   glActiveTexture(GL_TEXTURE0);
+   glBindTexture(GL_TEXTURE_3D, t);
+   glCompressedTexImage3D(GL_TEXTURE_3D, 0, 0x93B0, 8, 8, 2, 0, sizeof(d), d);
+   glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+   glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+   int r = gl_err("astc3d upload");
+   struct fbo f;
+   if (!fbo_create(&f, GL_RGBA8, 0, 1))
+      return 1;
+   GLuint p = program("#version 330 core\nlayout(location=0) in vec2 pos;\nout vec2 uv;\n"
+                      "void main() { uv = pos * 0.5 + 0.5; gl_Position = vec4(pos, 0.0, 1.0); }\n",
+                      "#version 330 core\nuniform sampler3D s;\nin vec2 uv;\nout vec4 c;\n"
+                      "void main() { c = texture(s, vec3(uv, 0.75)); }\n",
+                      NULL);
+   if (!p)
+      return 1;
+   static const float quad[] = {-1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1};
+   set_verts(quad, 12);
+   glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, 0);
+   glEnableVertexAttribArray(0);
+   glUseProgram(p);
+   glUniform1i(glGetUniformLocation(p, "s"), 0);
+   glDrawArrays(GL_TRIANGLES, 0, 6);
+   readback();
+   r += gl_err("astc3d") + verify("astc 3d slice 1", e_cmp, 1);
+   glDeleteProgram(p);
+   fbo_destroy(&f);
+   glDeleteTextures(1, &t);
+   return r;
+}
+
 /* ---- main --------------------------------------------------------------------------------- */
 static int want[32];
 
@@ -906,6 +1107,8 @@ int main(int argc, char **argv)
       {"varyings", t_varyings}, {"texture", t_texture}, {"blend", t_blend},
       {"depth", t_depth},    {"ubo", t_ubo},         {"compute", t_compute},
       {"occlusion", t_occlusion}, {"msaa", t_msaa},  {"terrain", t_terrain},
+      {"astc", t_astc},      {"etc2", t_etc2},      {"astc3d", t_astc3d},
+      {"discard", t_discard},
    };
    int fails = 0, ran = 0;
    for (unsigned i = 1; i < sizeof(tests) / sizeof(tests[0]); i++) {

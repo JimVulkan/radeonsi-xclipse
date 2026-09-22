@@ -87,7 +87,7 @@ void si_init_renderer_string(struct si_screen *sscreen)
 {
    char first_name[256], second_name[32] = {}, kernel_version[128] = {};
    struct utsname uname_data;
-   const char *name = ac_get_family_name(sscreen->info.family);
+   const char *name = ac_get_gpu_display_name(&sscreen->info);
 
    snprintf(first_name, sizeof(first_name), "%s", sscreen->info.marketing_name);
    memset(second_name, 0, sizeof(second_name));

@@ -19,6 +19,10 @@ on screen.
 | 9 | occlusion query |
 | 10 | 4x MSAA with a resolve blit |
 | 11 | Minecraft's terrain sampling (`sampleNearest` through `textureGrad`) |
+| 12 | ASTC 4x4 textures, UNORM and sRGB |
+| 13 | ETC2 RGB8 textures |
+| 14 | 3D ASTC texture, second slice sampled |
+| 15 | discarded pixels don't write depth (cutout grass in front of water) |
 
 ## Building
 
@@ -38,7 +42,7 @@ adb shell mkdir -p /data/local/tmp/rsi
 adb push libEGL_mesa.so libgallium_dri.so glprobe /data/local/tmp/rsi/
 adb shell "cd /data/local/tmp/rsi && chmod 755 glprobe && \
    MESA_LOADER_DRIVER_OVERRIDE=radeonsi LD_LIBRARY_PATH=/data/local/tmp/rsi \
-   ./glprobe /data/local/tmp/rsi/libEGL_mesa.so 1-11"
+   ./glprobe /data/local/tmp/rsi/libEGL_mesa.so 1-15"
 ```
 
 The second argument selects tests as a comma-separated list or ranges; the default is `0`. The last

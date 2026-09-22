@@ -1,8 +1,8 @@
 # RadeonSI for Samsung Xclipse
 
 A port of Mesa's RadeonSI OpenGL driver to Samsung Xclipse GPUs on Android, based on Mesa 26.2.3.
-It provides desktop OpenGL 4.6 and OpenGL ES through EGL. Currently only the Xclipse 920 (Exynos 2200) is
-supported.
+It provides desktop OpenGL 4.6 and OpenGL ES through EGL. Currently only the Xclipse 920 (Exynos 2200)
+and the Xclipse 530 (Exynos 1480) are supported.
 
 ## Requirements
 
@@ -46,7 +46,7 @@ a zip with them and `NOTICE.txt` to `dist/`.
 
 ## Compatibility
 
-Currently, the driver works only on the Xclipse 920. Other models are not compatible for now.
+The driver works on the Xclipse 920 and the Xclipse 530. Other models are not compatible for now.
 
 ## Runtime switches
 
@@ -57,11 +57,13 @@ Currently, the driver works only on the Xclipse 920. Other models are not compat
 | `debug.mesa_xclipse_hnd_dump` |-----| `1` logs each window buffer's gralloc handle |
 | `debug.mesa_xclipse_async_present` | `MESA_XCLIPSE_ASYNC_PRESENT` | `0` presents from the app thread instead of a helper thread |
 | `debug.mesa_xclipse_prof` | `MESA_XCLIPSE_PROF` | `<delay>,<seconds>` writes a CPU/GPU profile `mesa_prof_<pid>.txt` to `MESA_XCLIPSE_PROF_DIR` (else `$TMPDIR`) |
+| `debug.mesa_xclipse_dcc` | `MESA_XCLIPSE_DCC` | render target compression (DCC): `1` on, `0` off; on by default on the Xclipse 530 only |
 
 ## Disclaimer
 
 This project was developed with heavy use of AI tools. Every change is built and tested on a
-Galaxy S22 Ultra (SM-S908B, Xclipse 920) before it is published.
+Galaxy S22 Ultra (SM-S908B, Xclipse 920) and a Galaxy A55 (SM-A556B, Xclipse 530) before it is
+published.
 
 ## License
 

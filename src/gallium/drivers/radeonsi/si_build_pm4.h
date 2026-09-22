@@ -44,7 +44,23 @@
 #define radeon_set_reg_seq(reg, num, idx, prefix_name, packet, reset_filter_cam) do { \
    assert((reg) >= prefix_name##_REG_OFFSET && (reg) < prefix_name##_REG_END); \
    radeon_emit(PKT3(packet, num, 0) | PKT3_RESET_FILTER_CAM_S(reset_filter_cam)); \
-   radeon_emit((((reg) - prefix_name##_REG_OFFSET) >> 2) | ((idx) << 28)); \
+   /* Xclipse 530: apply TITAN's register map, as ac_cmdbuf does (no-op elsewhere). */ \
+   ac_titan_check_run(prefix_name##_REG_OFFSET, ((reg) - prefix_name##_REG_OFFSET) >> 2, (num)); \
+   radeon_emit(ac_titan_remap_dw(prefix_name##_REG_OFFSET, ((reg) - prefix_name##_REG_OFFSET) >> 2) | \
+               ((idx) << 28)); \
+} while (0)
+
+/* A run of registers. On the Xclipse 530 a run the map does not keep contiguous goes out one
+ * register at a time. */
+#define radeon_set_reg_run(reg, num, values, prefix_name, packet) do { \
+   if (unlikely(ac_titan_run_split(prefix_name##_REG_OFFSET, \
+                                   ((reg) - prefix_name##_REG_OFFSET) >> 2, (num)))) { \
+      for (unsigned __k = 0; __k < (unsigned)(num); __k++) \
+         radeon_set_reg((reg) + __k * 4, 0, (values)[__k], prefix_name, packet); \
+   } else { \
+      radeon_set_reg_seq(reg, num, 0, prefix_name, packet, 0); \
+      radeon_emit_array(values, num); \
+   } \
 } while (0)
 
 #define radeon_set_reg(reg, idx, value, prefix_name, packet) do { \
@@ -71,9 +87,8 @@
                                       (reg_enum), (reg_enum) + 1, 0x3) || \
        sctx->tracked_regs.reg_value[(reg_enum)] != __v1 || \
        sctx->tracked_regs.reg_value[(reg_enum) + 1] != __v2) { \
-      radeon_set_reg_seq(reg, 2, 0, prefix_name, packet, 0); \
-      radeon_emit(__v1); \
-      radeon_emit(__v2); \
+      { const uint32_t __vals[2] = {__v1, __v2}; \
+        radeon_set_reg_run(reg, 2, __vals, prefix_name, packet); } \
       BITSET_SET_RANGE_INSIDE_WORD(sctx->tracked_regs.reg_saved_mask, \
                                    (reg_enum), (reg_enum) + 1); \
       sctx->tracked_regs.reg_value[(reg_enum)] = __v1; \
@@ -90,10 +105,8 @@
        sctx->tracked_regs.reg_value[(reg_enum)] != __v1 || \
        sctx->tracked_regs.reg_value[(reg_enum) + 1] != __v2 || \
        sctx->tracked_regs.reg_value[(reg_enum) + 2] != __v3) { \
-      radeon_set_reg_seq(reg, 3, 0, prefix_name, packet, 0); \
-      radeon_emit(__v1); \
-      radeon_emit(__v2); \
-      radeon_emit(__v3); \
+      { const uint32_t __vals[3] = {__v1, __v2, __v3}; \
+        radeon_set_reg_run(reg, 3, __vals, prefix_name, packet); } \
       BITSET_SET_RANGE_INSIDE_WORD(sctx->tracked_regs.reg_saved_mask, \
                                    (reg_enum), (reg_enum) + 2); \
       sctx->tracked_regs.reg_value[(reg_enum)] = __v1; \
@@ -112,11 +125,8 @@
        sctx->tracked_regs.reg_value[(reg_enum) + 1] != __v2 || \
        sctx->tracked_regs.reg_value[(reg_enum) + 2] != __v3 || \
        sctx->tracked_regs.reg_value[(reg_enum) + 3] != __v4) { \
-      radeon_set_reg_seq(reg, 4, 0, prefix_name, packet, 0); \
-      radeon_emit(__v1); \
-      radeon_emit(__v2); \
-      radeon_emit(__v3); \
-      radeon_emit(__v4); \
+      { const uint32_t __vals[4] = {__v1, __v2, __v3, __v4}; \
+        radeon_set_reg_run(reg, 4, __vals, prefix_name, packet); } \
       BITSET_SET_RANGE_INSIDE_WORD(sctx->tracked_regs.reg_saved_mask, \
                                    (reg_enum), (reg_enum) + 3); \
       sctx->tracked_regs.reg_value[(reg_enum)] = __v1; \
@@ -137,12 +147,8 @@
        sctx->tracked_regs.reg_value[(reg_enum) + 2] != __v3 || \
        sctx->tracked_regs.reg_value[(reg_enum) + 3] != __v4 || \
        sctx->tracked_regs.reg_value[(reg_enum) + 4] != __v5) { \
-      radeon_set_reg_seq(reg, 5, 0, prefix_name, packet, 0); \
-      radeon_emit(__v1); \
-      radeon_emit(__v2); \
-      radeon_emit(__v3); \
-      radeon_emit(__v4); \
-      radeon_emit(__v5); \
+      { const uint32_t __vals[5] = {__v1, __v2, __v3, __v4, __v5}; \
+        radeon_set_reg_run(reg, 5, __vals, prefix_name, packet); } \
       BITSET_SET_RANGE_INSIDE_WORD(sctx->tracked_regs.reg_saved_mask, \
                                    (reg_enum), (reg_enum) + 4); \
       sctx->tracked_regs.reg_value[(reg_enum)] = __v1; \
@@ -165,13 +171,8 @@
        sctx->tracked_regs.reg_value[(reg_enum) + 3] != __v4 || \
        sctx->tracked_regs.reg_value[(reg_enum) + 4] != __v5 || \
        sctx->tracked_regs.reg_value[(reg_enum) + 5] != __v6) { \
-      radeon_set_reg_seq(reg, 6, 0, prefix_name, packet, 0); \
-      radeon_emit(__v1); \
-      radeon_emit(__v2); \
-      radeon_emit(__v3); \
-      radeon_emit(__v4); \
-      radeon_emit(__v5); \
-      radeon_emit(__v6); \
+      { const uint32_t __vals[6] = {__v1, __v2, __v3, __v4, __v5, __v6}; \
+        radeon_set_reg_run(reg, 6, __vals, prefix_name, packet); } \
       BITSET_SET_RANGE_INSIDE_WORD(sctx->tracked_regs.reg_saved_mask, \
                                    (reg_enum), (reg_enum) + 5); \
       sctx->tracked_regs.reg_value[(reg_enum)] = __v1; \
@@ -185,8 +186,7 @@
 
 #define radeon_opt_set_regn(reg, values, saved_values, num, prefix_name, packet) do { \
    if (memcmp(values, saved_values, sizeof(uint32_t) * (num))) { \
-      radeon_set_reg_seq(reg, num, 0, prefix_name, packet, 0); \
-      radeon_emit_array(values, num); \
+      radeon_set_reg_run(reg, num, values, prefix_name, packet); \
       memcpy(saved_values, values, sizeof(uint32_t) * (num)); \
    } \
 } while (0)
@@ -233,8 +233,12 @@
 #define radeon_set_sh_reg(reg, value) \
    ac_cmdbuf_set_sh_reg(reg, value)
 
-#define radeon_opt_set_sh_reg(reg, reg_enum, value) \
-   radeon_opt_set_reg(reg, reg_enum, 0, value, SI_SH, PKT3_SET_SH_REG)
+/* On the Xclipse 530 the two GS CU-mask registers are not written, as in RADV (the vendor never
+ * writes them either; see ac_titan_sh_suppressed()). */
+#define radeon_opt_set_sh_reg(reg, reg_enum, value) do { \
+   if (!ac_titan_sh_suppressed(reg)) \
+      radeon_opt_set_reg(reg, reg_enum, 0, value, SI_SH, PKT3_SET_SH_REG); \
+} while (0)
 
 #define radeon_opt_set_sh_reg2(reg, reg_enum, v1, v2) \
    radeon_opt_set_reg2(reg, reg_enum, v1, v2, SI_SH, PKT3_SET_SH_REG)

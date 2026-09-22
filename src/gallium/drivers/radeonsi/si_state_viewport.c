@@ -697,7 +697,8 @@ void si_init_viewport_functions(struct si_context *ctx)
 {
    ctx->atoms.s.guardband.emit = si_emit_guardband;
    ctx->atoms.s.scissors.emit = si_emit_scissors;
-   if (ctx->gfx_level >= GFX12)
+   /* The Xclipse 530 lays the viewports out like GFX12 (ZMIN/ZMAX inside each viewport's run). */
+   if (ctx->gfx_level >= GFX12 || ac_titan_regmap_active)
       ctx->atoms.s.viewports.emit = gfx12_emit_viewport_states;
    else
       ctx->atoms.s.viewports.emit = gfx6_emit_viewport_states;

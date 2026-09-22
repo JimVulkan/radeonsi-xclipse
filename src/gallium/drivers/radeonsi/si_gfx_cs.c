@@ -469,8 +469,10 @@ void si_begin_new_gfx_cs(struct si_context *ctx, bool first_cs)
    if (ctx->queued.named.ps)
       ctx->prefetch_L2_mask |= SI_PREFETCH_PS;
 
-   /* CLEAR_STATE disables all colorbuffers, so only enable bound ones. */
-   bool has_clear_state = ctx->screen->info.has_clear_state;
+   /* CLEAR_STATE disables all colorbuffers, so only enable bound ones.
+    * The Xclipse 530's preamble has no CLEAR_STATE (see gfx10_init_gfx_preamble_state), so nothing
+    * can be assumed about register values when a command buffer starts. */
+   bool has_clear_state = ctx->screen->info.has_clear_state && !ac_titan_regmap_active;
    if (has_clear_state) {
       ctx->framebuffer.dirty_cbufs =
             BITFIELD_MASK(ctx->framebuffer.state.nr_cbufs);
@@ -530,7 +532,7 @@ void si_begin_new_gfx_cs(struct si_context *ctx, bool first_cs)
       si_mark_atom_dirty(ctx, &ctx->atoms.s.vgt_pipeline_state);
       si_mark_atom_dirty(ctx, &ctx->atoms.s.tess_io_layout);
 
-      ac_init_tracked_regs(&ctx->tracked_regs, &ctx->screen->info, true);
+      ac_init_tracked_regs(&ctx->tracked_regs, &ctx->screen->info, has_clear_state);
    }
 
    /* Invalidate various draw states so that they are emitted before

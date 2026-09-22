@@ -8,7 +8,8 @@
  * functions named. Off unless MESA_XCLIPSE_PROF (or the property debug.mesa_xclipse_prof) is set
  * to "<delay>[,<seconds>]": <delay> seconds after the screen is created, every thread in the
  * process is sampled at each tick (250 Hz) of its own CPU time for <seconds> (default 20), then a
- * helper thread writes mesa_prof_<pid>.txt into MESA_XCLIPSE_PROF_DIR, else $TMPDIR. Each sample
+ * helper thread writes mesa_prof_<pid>.txt into MESA_XCLIPSE_PROF_DIR, else $TMPDIR, else the app's
+ * /sdcard/Android/data/<package>/files (which an app can always write and adb can read). Each sample
  * is the program counter plus the return addresses from the frame-pointer chain, bounded by the
  * thread's own stack mapping; the header gives frames presented and per-thread CPU time over the
  * window. Symbolize with tools/profsym.py.
@@ -71,7 +72,7 @@ static int prof_nthreads;
 static atomic_llong prof_wait_ns[U_XCLIPSE_WAIT_COUNT];
 static atomic_uint prof_wait_n[U_XCLIPSE_WAIT_COUNT];
 static const char *const prof_wait_names[U_XCLIPSE_WAIT_COUNT] = {
-   "dequeueBuffer", "swap_flush_and_fence", "client_fence", "bo_idle", "tc_sync",
+   "dequeueBuffer", "swap_flush_and_fence", "client_fence", "bo_idle", "tc_sync", "queue_submit",
 };
 
 static void
@@ -133,6 +134,12 @@ void
 u_xclipse_prof_frame(void)
 {
    atomic_fetch_add_explicit(&prof_frames, 1, memory_order_relaxed);
+}
+
+unsigned
+u_xclipse_prof_frames(void)
+{
+   return atomic_load_explicit(&prof_frames, memory_order_relaxed);
 }
 
 static void
@@ -297,17 +304,43 @@ prof_scan_threads(void)
    closedir(d);
 }
 
+static FILE *
+prof_open(void)
+{
+   char path[512], pkg[256] = {0};
+   const char *dirs[4] = {getenv("MESA_XCLIPSE_PROF_DIR"), getenv("TMPDIR"), NULL,
+                          "/data/local/tmp"};
+   /* An app launched without an environment (Eden, any APK) still has its own external files
+    * directory: the process name is the package, up to a ':' for secondary processes. */
+   FILE *c = fopen("/proc/self/cmdline", "r");
+   if (c) {
+      if (fgets(pkg, sizeof(pkg), c)) {
+         char *colon = strchr(pkg, ':');
+         if (colon)
+            *colon = 0;
+      }
+      fclose(c);
+   }
+   char appdir[320];
+   if (pkg[0] && strchr(pkg, '.')) {
+      snprintf(appdir, sizeof(appdir), "/sdcard/Android/data/%s/files", pkg);
+      dirs[2] = appdir;
+   }
+   for (int i = 0; i < 4; i++) {
+      if (!dirs[i] || !dirs[i][0])
+         continue;
+      snprintf(path, sizeof(path), "%s/mesa_prof_%d.txt", dirs[i], getpid());
+      FILE *f = fopen(path, "w");
+      if (f)
+         return f;
+   }
+   return NULL;
+}
+
 static void
 prof_write(double seconds, unsigned frames)
 {
-   const char *dir = getenv("MESA_XCLIPSE_PROF_DIR");
-   if (!dir || !dir[0])
-      dir = getenv("TMPDIR");
-   if (!dir || !dir[0])
-      dir = "/data/local/tmp";
-   char path[512];
-   snprintf(path, sizeof(path), "%s/mesa_prof_%d.txt", dir, getpid());
-   FILE *f = fopen(path, "w");
+   FILE *f = prof_open();
    if (!f)
       return;
    fprintf(f, "# seconds %.2f frames %u fps %.1f clk_tck %ld\n", seconds, frames,

@@ -27,6 +27,10 @@
 
 #include <xf86drm.h>
 
+#if DETECT_OS_ANDROID
+#include <sys/system_properties.h>
+#endif
+
 static const struct debug_named_value radeonsi_debug_options[] = {
    /* Information logging options: */
    {"info", DBG(INFO), "Print driver information"},
@@ -219,8 +223,20 @@ static struct pipe_screen *radeonsi_screen_create_impl(struct radeon_winsys *ws,
     *   - no FMASK: MSAA the GFX11 way (ac_surface also drops MSAA CMASK)
     *   - no NGG culling: back-to-back culling draws hang without a VGT_FLUSH between them
     */
-   if (sscreen->info.gfx11_shader_core)
-      sscreen->debug_flags |= DBG(NO_DCC) | DBG(NO_FMASK) | DBG(NO_NGG_CULLING);
+   if (sscreen->info.gfx11_shader_core) {
+      sscreen->debug_flags |= DBG(NO_FMASK) | DBG(NO_NGG_CULLING);
+      /* DCC: on by default on the Xclipse 530 (Minecraft 30 -> 46 fps), not yet tested in radeonsi
+       * on the 920. MESA_XCLIPSE_DCC or debug.mesa_xclipse_dcc: 1 turns it on, 0 off. */
+      const char *dcc = getenv("MESA_XCLIPSE_DCC");
+#if DETECT_OS_ANDROID
+      char prop[PROP_VALUE_MAX] = {0};
+      if (!(dcc && dcc[0]) && __system_property_get("debug.mesa_xclipse_dcc", prop) > 0)
+         dcc = prop;
+#endif
+      const bool use_dcc = dcc && dcc[0] ? dcc[0] == '1' : sscreen->info.family == CHIP_TITAN;
+      if (!use_dcc)
+         sscreen->debug_flags |= DBG(NO_DCC);
+   }
 
    if ((sscreen->debug_flags & DBG(TMZ)) &&
        !sscreen->info.has_tmz_support) {

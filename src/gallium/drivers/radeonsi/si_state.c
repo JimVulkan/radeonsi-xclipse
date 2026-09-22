@@ -5,6 +5,7 @@
  */
 
 #include "si_build_pm4.h"
+#include "ac_xclipse_ctxinit.h"
 #include "si_query.h"
 #include "gfx/si_gfx.h"
 #include "gfx/si_shader_internal.h"
@@ -2798,6 +2799,25 @@ static void gfx6_emit_framebuffer_state(struct si_context *sctx, unsigned index)
          radeon_set_context_reg(R_028EA0_CB_COLOR0_DCC_BASE_EXT + i * 4, cb_surf.cb_dcc_base >> 32);
          radeon_set_context_reg(R_028EC0_CB_COLOR0_ATTRIB2 + i * 4, cb_surf.cb_color_attrib2);
          radeon_set_context_reg(R_028EE0_CB_COLOR0_ATTRIB3 + i * 4, cb_surf.cb_color_attrib3);
+      } else if (ac_titan_regmap_active) {
+         /* Xclipse 530 (TITAN): the per-MRT block is 9 dwords and CB_COLORi_INFO lives in its own
+          * array, so GFX10's run would land on the wrong registers. Each one goes out on its own
+          * through the map. */
+         radeon_set_context_reg(R_028C60_CB_COLOR0_BASE + i * 0x3C, cb_surf.cb_color_base);
+         radeon_set_context_reg(R_028C6C_CB_COLOR0_VIEW + i * 0x3C, cb_surf.cb_color_view);
+         radeon_set_context_reg(R_028C70_CB_COLOR0_INFO + i * 0x3C, cb_surf.cb_color_info);
+         radeon_set_context_reg(R_028C74_CB_COLOR0_ATTRIB + i * 0x3C, cb_surf.cb_color_attrib);
+         if (mutable_cb_state.dcc_enabled) {
+            radeon_set_context_reg(R_028C78_CB_COLOR0_DCC_CONTROL + i * 0x3C, cb_surf.cb_dcc_control);
+            radeon_set_context_reg(R_028C94_CB_COLOR0_DCC_BASE + i * 0x3C, cb_surf.cb_dcc_base);
+            radeon_set_context_reg(R_028EA0_CB_COLOR0_DCC_BASE_EXT + i * 4, cb_surf.cb_dcc_base >> 32);
+            /* The colour a DCC fast clear stands for. */
+            radeon_set_context_reg(R_028C8C_CB_COLOR0_CLEAR_WORD0 + i * 0x3C, tex->color_clear_value[0]);
+            radeon_set_context_reg(R_028C90_CB_COLOR0_CLEAR_WORD1 + i * 0x3C, tex->color_clear_value[1]);
+         }
+         radeon_set_context_reg(R_028E40_CB_COLOR0_BASE_EXT + i * 4, cb_surf.cb_color_base >> 32);
+         radeon_set_context_reg(R_028EC0_CB_COLOR0_ATTRIB2 + i * 4, cb_surf.cb_color_attrib2);
+         radeon_set_context_reg(R_028EE0_CB_COLOR0_ATTRIB3 + i * 4, cb_surf.cb_color_attrib3);
       } else if (sctx->gfx_level >= GFX10) {
          radeon_set_context_reg_seq(R_028C60_CB_COLOR0_BASE + i * 0x3C, 14);
          radeon_emit(cb_surf.cb_color_base);             /* CB_COLOR0_BASE */
@@ -2893,7 +2913,8 @@ static void gfx6_emit_framebuffer_state(struct si_context *sctx, unsigned index)
          radeon_set_context_reg(R_028014_DB_HTILE_DATA_BASE, ds.u.gfx6.db_htile_data_base);
          radeon_set_context_reg(R_02801C_DB_DEPTH_SIZE_XY, ds.db_depth_size);
 
-         if (sctx->gfx_level >= GFX11) {
+         /* The Xclipse 530 has no DB_DEPTH_INFO: that offset maps to DB_DEPTH_SIZE_XY's old slot. */
+         if (sctx->gfx_level >= GFX11 || ac_titan_regmap_active) {
             radeon_set_context_reg_seq(R_028040_DB_Z_INFO, 6);
          } else {
             radeon_set_context_reg_seq(R_02803C_DB_DEPTH_INFO, 7);
@@ -2906,12 +2927,21 @@ static void gfx6_emit_framebuffer_state(struct si_context *sctx, unsigned index)
          radeon_emit(ds.db_depth_base);   /* DB_Z_WRITE_BASE */
          radeon_emit(ds.db_stencil_base); /* DB_STENCIL_WRITE_BASE */
 
-         radeon_set_context_reg_seq(R_028068_DB_Z_READ_BASE_HI, 5);
-         radeon_emit(ds.db_depth_base >> 32);      /* DB_Z_READ_BASE_HI */
-         radeon_emit(ds.db_stencil_base >> 32);    /* DB_STENCIL_READ_BASE_HI */
-         radeon_emit(ds.db_depth_base >> 32);      /* DB_Z_WRITE_BASE_HI */
-         radeon_emit(ds.db_stencil_base >> 32);    /* DB_STENCIL_WRITE_BASE_HI */
-         radeon_emit(ds.u.gfx6.db_htile_data_base >> 32); /* DB_HTILE_DATA_BASE_HI */
+         if (ac_titan_regmap_active) {
+            /* The Xclipse 530 scatters the five high halves; the map places each one. */
+            radeon_set_context_reg(R_028068_DB_Z_READ_BASE_HI, ds.db_depth_base >> 32);
+            radeon_set_context_reg(R_02806C_DB_STENCIL_READ_BASE_HI, ds.db_stencil_base >> 32);
+            radeon_set_context_reg(R_028070_DB_Z_WRITE_BASE_HI, ds.db_depth_base >> 32);
+            radeon_set_context_reg(R_028074_DB_STENCIL_WRITE_BASE_HI, ds.db_stencil_base >> 32);
+            radeon_set_context_reg(R_028078_DB_HTILE_DATA_BASE_HI, ds.u.gfx6.db_htile_data_base >> 32);
+         } else {
+            radeon_set_context_reg_seq(R_028068_DB_Z_READ_BASE_HI, 5);
+            radeon_emit(ds.db_depth_base >> 32);      /* DB_Z_READ_BASE_HI */
+            radeon_emit(ds.db_stencil_base >> 32);    /* DB_STENCIL_READ_BASE_HI */
+            radeon_emit(ds.db_depth_base >> 32);      /* DB_Z_WRITE_BASE_HI */
+            radeon_emit(ds.db_stencil_base >> 32);    /* DB_STENCIL_WRITE_BASE_HI */
+            radeon_emit(ds.u.gfx6.db_htile_data_base >> 32); /* DB_HTILE_DATA_BASE_HI */
+         }
       } else if (sctx->gfx_level == GFX9) {
          radeon_set_context_reg_seq(R_028014_DB_HTILE_DATA_BASE, 3);
          radeon_emit(ds.u.gfx6.db_htile_data_base); /* DB_HTILE_DATA_BASE */
@@ -4982,8 +5012,12 @@ static bool gfx10_init_gfx_preamble_state(struct si_context *sctx)
 {
    struct si_screen *sscreen = sctx->screen;
 
+   /* Xclipse 530: no CLEAR_STATE (unstable on this chip); every preamble programs the context
+    * registers to the values the vendor's init establishes instead, as RADV does. */
+   const bool titan = ac_titan_regmap_active;
+
    /* We need more space because the preamble is large. */
-   struct si_pm4_state *pm4 = si_pm4_create_sized(sscreen, 214, sctx->is_gfx_queue);
+   struct si_pm4_state *pm4 = si_pm4_create_sized(sscreen, titan ? 2048 : 214, sctx->is_gfx_queue);
    if (!pm4) {
       mesa_loge("failed to allocate memory for cs_preamble_state");
       return false;
@@ -5012,10 +5046,16 @@ static bool gfx10_init_gfx_preamble_state(struct si_context *sctx)
          ac_pm4_cmd_add(&pm4->base, EVENT_TYPE(V_028A90_BREAK_BATCH) | EVENT_INDEX(0));
       }
 
-      if (sctx->gfx_level < GFX11) {
+      if (sctx->gfx_level < GFX11 && !titan) {
          ac_pm4_cmd_add(&pm4->base, PKT3(PKT3_CLEAR_STATE, 0, 0));
          ac_pm4_cmd_add(&pm4->base, 0);
       }
+   }
+
+   if (titan && sctx->is_gfx_queue) {
+      /* Ascending order: ac_pm4_set_reg coalesces consecutive registers. */
+      for (unsigned i = 0; i < ARRAY_SIZE(ac_xclipse_ctx_init); i++)
+         ac_pm4_set_reg(&pm4->base, ac_xclipse_ctx_init[i].reg, ac_xclipse_ctx_init[i].val);
    }
 
    si_init_compute_preamble_state(sctx, pm4);
@@ -5025,6 +5065,15 @@ static bool gfx10_init_gfx_preamble_state(struct si_context *sctx)
 
    /* Graphics registers. */
    si_init_graphics_preamble_state(sctx, pm4);
+
+   if (titan) {
+      /* What CLEAR_STATE would have set, as in RADV without it. */
+      for (unsigned i = 0; i < 16; i++) {
+         ac_pm4_set_reg(&pm4->base, R_0282D0_PA_SC_VPORT_ZMIN_0 + i * 8, 0);
+         ac_pm4_set_reg(&pm4->base, R_0282D4_PA_SC_VPORT_ZMAX_0 + i * 8, fui(1.0));
+      }
+      ac_pm4_set_reg(&pm4->base, R_028230_PA_SC_EDGERULE, 0xAAAAAAAA);
+   }
 
    ac_pm4_set_reg(&pm4->base, R_028708_SPI_SHADER_IDX_FORMAT,
                   S_028708_IDX0_EXPORT_FORMAT(V_028708_SPI_SHADER_1COMP));
@@ -5044,7 +5093,7 @@ static bool gfx10_init_gfx_preamble_state(struct si_context *sctx)
                      S_028848_SAMPLE_ITER_COMBINER_MODE(V_028848_SC_VRS_COMB_MODE_OVERRIDE));
    }
 
-   if (sctx->gfx_level >= GFX11) {
+   if (sctx->gfx_level >= GFX11 || titan) {
       /* These are set by CLEAR_STATE on gfx10. We don't use CLEAR_STATE on gfx11. */
       ac_pm4_set_reg(&pm4->base, R_028034_PA_SC_SCREEN_SCISSOR_BR,
                      S_028034_BR_X(16384) | S_028034_BR_Y(16384));

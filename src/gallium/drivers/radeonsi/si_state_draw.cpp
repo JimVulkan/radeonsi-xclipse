@@ -1085,6 +1085,11 @@ static void si_emit_rasterizer_prim_state(struct si_context *sctx)
       if (GFX_VERSION >= GFX11) {
          radeon_opt_set_uconfig_reg(R_030998_VGT_GS_OUT_PRIM_TYPE,
                                     AC_TRACKED_VGT_GS_OUT_PRIM_TYPE_UCONFIG, sctx->gs_out_prim);
+      } else if (GFX_VERSION == GFX10_3 && ac_titan_regmap_active) {
+         /* The Xclipse 530 moved it to UCONFIG 0x030904 (as in RADV); context 0x29b is another
+          * register there. */
+         radeon_opt_set_uconfig_reg(0x030904, AC_TRACKED_VGT_GS_OUT_PRIM_TYPE_UCONFIG,
+                                    sctx->gs_out_prim);
       } else {
          radeon_opt_set_context_reg(R_028A6C_VGT_GS_OUT_PRIM_TYPE,
                                     AC_TRACKED_VGT_GS_OUT_PRIM_TYPE, sctx->gs_out_prim);
