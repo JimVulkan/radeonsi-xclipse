@@ -323,6 +323,9 @@ dri_create_fence_fd(struct dri_context *_ctx, int fd);
 PUBLIC int
 dri_get_fence_fd(struct dri_screen *driscreen, void *_fence);
 PUBLIC void *
+dri_flush_swap_with_fence(struct dri_context *ctx, struct dri_drawable *drawable,
+                          unsigned flags, enum __DRI2throttleReason reason);
+PUBLIC void *
 dri_get_fence_from_cl_event(struct dri_screen *driscreen, intptr_t cl_event);
 PUBLIC void
 dri_destroy_fence(struct dri_screen *driscreen, void *_fence);

@@ -731,7 +731,11 @@ bool si_compute_blit(struct si_context *sctx, const struct pipe_blit_info *info,
                       /* Compressed and subsampled image blits can't fail because
                        * the gfx (pixel shader) blit doesn't support them. */
                       !((src_access | dst_access) & SI_IMAGE_ACCESS_BLOCK_FORMAT_AS_UINT) &&
-                      !(sctx->screen->debug_flags & DBG(FORCE_COMPUTE_BLIT)),
+                      !(sctx->screen->debug_flags & DBG(FORCE_COMPUTE_BLIT)) &&
+                      /* Xclipse 920: compute copies beat the pixel-shader blit on this chip
+                       * (texture sub-uploads -29% CPU / -52% GPU, a full-screen copy -6%), and
+                       * skip u_blitter's state save/restore. Clears keep their own logic. */
+                      !(sctx->screen->info.gfx11_shader_core && !is_clear),
    };
 
    struct ac_cs_blit_description blit = {

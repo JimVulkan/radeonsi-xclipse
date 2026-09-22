@@ -29,6 +29,8 @@
  */
 
 #include "util/libdrm.h"
+#include "util/os_time.h"
+#include "util/u_xclipse_prof.h"
 #include "git_sha1.h"
 #include "GL/mesa_glinterop.h"
 #include "mesa_interface.h"
@@ -154,12 +156,17 @@ dri_image_drawable_get_buffers(struct dri_drawable *drawable,
     *    st_api_make_current
     *    st_manager_validate_framebuffers (part of st_validate_state)
     */
-   return drawable->screen->image.loader->getBuffers(
+   /* Xclipse field profiler: on Android this is where the window buffer is dequeued. */
+   const int64_t prof_t0 = u_xclipse_prof_active() ? os_time_get_nano() : 0;
+   const int r = drawable->screen->image.loader->getBuffers(
                                           drawable,
                                           color_format,
                                           (uint32_t *)&drawable->base.stamp,
                                           drawable->loaderPrivate, buffer_mask,
                                           images);
+   if (prof_t0)
+      u_xclipse_prof_wait(U_XCLIPSE_WAIT_DEQUEUE, os_time_get_nano() - prof_t0);
+   return r;
 }
 
 static void

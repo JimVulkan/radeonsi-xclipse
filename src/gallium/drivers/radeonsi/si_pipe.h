@@ -1083,6 +1083,15 @@ struct si_context {
    struct pipe_resource *gsvs_ring;
    union pipe_color_union *border_color_table; /* in CPU memory, any endian */
    struct si_resource *border_color_buffer;
+   /* Xclipse field profiler: IB start/end GPU timestamps (si_xclipse_prof.c). */
+   struct si_resource *xprof_ts;
+   uint64_t *xprof_ts_map;
+   unsigned xprof_ts_next, xprof_slot;
+   bool xprof_slot_open;
+   struct si_resource *xprof_pass_ts;
+   uint64_t *xprof_pass_map;
+   struct si_xprof_pass *xprof_pass_meta;
+   unsigned xprof_pass_n, xprof_pass_draws0, xprof_frame;
    union pipe_color_union *border_color_map; /* in VRAM (slow access), little endian */
    unsigned border_color_count;
    unsigned num_vs_blit_sgprs;
@@ -2190,6 +2199,12 @@ si_emit_all_states(struct si_context *sctx, uint64_t skip_atom_mask)
 
 #define PRINT_ERR(fmt, args...)                                                                    \
    mesa_loge("%s:%d %s - " fmt, __FILE__, __LINE__, __func__, ##args)
+
+/* si_xclipse_prof.c */
+void si_xprof_begin_cs(struct si_context *ctx);
+void si_xprof_end_cs(struct si_context *ctx);
+void si_xprof_pass_boundary(struct si_context *ctx, bool compute, unsigned groups);
+void si_xprof_destroy(struct si_context *ctx);
 
 #ifdef __cplusplus
 }

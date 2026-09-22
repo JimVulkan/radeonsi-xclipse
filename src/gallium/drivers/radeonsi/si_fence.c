@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "util/u_xclipse_prof.h"
 #include "si_pipe.h"
 #include "gfx/si_gfx.h"
 #include "ac_cmdbuf_cp.h"
@@ -233,13 +234,43 @@ static void si_fine_fence_set(struct si_context *ctx, struct si_fine_fence *fine
    }
 }
 
+static bool si_fence_finish_impl(struct pipe_screen *screen, struct pipe_context *ctx,
+                                 struct pipe_fence_handle *fence, uint64_t timeout);
+
+/* Xclipse field profiler: time client fence waits (glClientWaitSync, glFinish). */
 static bool si_fence_finish(struct pipe_screen *screen, struct pipe_context *ctx,
                             struct pipe_fence_handle *fence, uint64_t timeout)
+{
+   if (likely(!u_xclipse_prof_active()) || !timeout)
+      return si_fence_finish_impl(screen, ctx, fence, timeout);
+   const int64_t t0 = os_time_get_nano();
+   const bool r = si_fence_finish_impl(screen, ctx, fence, timeout);
+   u_xclipse_prof_wait(U_XCLIPSE_WAIT_CLIENT_FENCE, os_time_get_nano() - t0);
+   return r;
+}
+
+static bool si_fence_finish_impl(struct pipe_screen *screen, struct pipe_context *ctx,
+                                 struct pipe_fence_handle *fence, uint64_t timeout)
 {
    struct radeon_winsys *rws = ((struct si_screen *)screen)->ws;
    struct si_fence *sfence = (struct si_fence *)fence;
    struct si_context *sctx;
    int64_t abs_timeout = os_time_get_absolute_timeout(timeout);
+
+   /* Fast paths that don't drain the driver thread (unwrap_sync below does): games poll their
+    * frame fences every frame, and most polls find the fence either done or not yet submitted.
+    * - Done: the driver thread already processed the flush (ready) and the submission retired.
+    * - Not yet processed and not waiting: flush the fence's batch asynchronously and report busy,
+    *   which is what the slow path ends up doing for this case. */
+   if (util_queue_fence_is_signalled(&sfence->ready)) {
+      if (!sfence->gfx || (sfence->fine.buf && si_fine_fence_signaled(rws, &sfence->fine)) ||
+          rws->fence_wait(rws, sfence->gfx, 0))
+         return true;
+   } else if (!timeout) {
+      if (sfence->tc_token && ctx)
+         threaded_context_flush(ctx, sfence->tc_token, true);
+      return false;
+   }
 
    ctx = threaded_context_unwrap_sync(ctx);
    sctx = (struct si_context *)(ctx ? ctx : NULL);
@@ -428,8 +459,11 @@ static void si_flush_all_queues(struct pipe_context *ctx,
       si_flush_implicit_resources(sctx);
    }
 
-   if (flags & PIPE_FLUSH_END_OF_FRAME)
+   if (flags & PIPE_FLUSH_END_OF_FRAME) {
       rflags |= PIPE_FLUSH_END_OF_FRAME;
+      u_xclipse_prof_frame();
+      sctx->xprof_frame++;
+   }
 
    if (flags & (PIPE_FLUSH_TOP_OF_PIPE | PIPE_FLUSH_BOTTOM_OF_PIPE)) {
       assert(flags & PIPE_FLUSH_DEFERRED);

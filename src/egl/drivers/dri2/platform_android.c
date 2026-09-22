@@ -242,6 +242,162 @@ close_in_fence_fd(struct dri2_egl_surface *dri2_surf)
    dri2_surf->in_fence_fd = -1;
 }
 
+/* Window buffers keep their DRI image across frames. Upstream destroyed it after every
+ * queueBuffer and imported the gralloc buffer again on the next dequeue: a dma-buf import, a GPU
+ * VA map and unmap and a handful of other ioctls per frame, and on Samsung sgpu every VA map is a
+ * page-table update the kernel flushes by hand. A buffer is recognised by its ANativeWindowBuffer
+ * and the inode of its dma-buf (the cached import holds the dma-buf, so a new buffer can't reuse
+ * the inode). */
+static uint64_t
+droid_buffer_dmabuf_ino(const struct ANativeWindowBuffer *buf)
+{
+   struct stat st;
+
+   if (!buf || !buf->handle || buf->handle->numFds < 1 || fstat(buf->handle->data[0], &st))
+      return 0;
+   return st.st_ino;
+}
+
+static void
+droid_drop_cached_image(struct dri2_egl_surface *dri2_surf, int i)
+{
+   if (dri2_surf->color_buffers[i].dri_image) {
+      if (dri2_surf->dri_image_back == dri2_surf->color_buffers[i].dri_image)
+         dri2_surf->dri_image_back = NULL;
+      dri2_destroy_image(dri2_surf->color_buffers[i].dri_image);
+      dri2_surf->color_buffers[i].dri_image = NULL;
+   }
+   dri2_surf->color_buffers[i].dmabuf_ino = 0;
+}
+
+/* Let go of the back image: destroy it unless the cache owns it. */
+static void
+droid_release_back_image(struct dri2_egl_surface *dri2_surf)
+{
+   if (!dri2_surf->dri_image_back)
+      return;
+
+   bool cached = false;
+   for (int i = 0; i < dri2_surf->color_buffers_count; i++)
+      cached |= dri2_surf->color_buffers[i].dri_image == dri2_surf->dri_image_back;
+   if (!cached)
+      dri2_destroy_image(dri2_surf->dri_image_back);
+   dri2_surf->dri_image_back = NULL;
+}
+
+/* Async present. The app thread flushes the frame with an asynchronous fence and hands the
+ * buffer to this thread, which exports the fence (it waits for the driver thread and the kernel
+ * submission) and queues the buffer. Buffers are queued in order; at most two wait here, and
+ * dequeueBuffer still paces the app like before. */
+static void *
+droid_present_thread_main(void *arg)
+{
+   struct dri2_egl_surface *dri2_surf = arg;
+   struct dri2_egl_display *dri2_dpy = dri2_egl_display(dri2_surf->base.Resource.Display);
+
+   pthread_mutex_lock(&dri2_surf->present_mtx);
+   for (;;) {
+      while (dri2_surf->present_head == dri2_surf->present_tail && !dri2_surf->present_quit)
+         pthread_cond_wait(&dri2_surf->present_cond, &dri2_surf->present_mtx);
+      if (dri2_surf->present_head == dri2_surf->present_tail)
+         break;
+      const unsigned i = dri2_surf->present_head % ARRAY_SIZE(dri2_surf->present_q);
+      struct ANativeWindowBuffer *buffer = dri2_surf->present_q[i].buffer;
+      void *fence = dri2_surf->present_q[i].fence;
+      pthread_mutex_unlock(&dri2_surf->present_mtx);
+
+      int fence_fd = -1;
+      if (fence) {
+         fence_fd = dri_get_fence_fd(dri2_dpy->dri_screen_render_gpu, fence);
+         dri_destroy_fence(dri2_dpy->dri_screen_render_gpu, fence);
+      }
+      droid_present_probe(dri2_dpy, buffer, fence_fd);
+      ANativeWindow_queueBuffer(dri2_surf->window, buffer, fence_fd);
+
+      pthread_mutex_lock(&dri2_surf->present_mtx);
+      dri2_surf->present_head++;
+      pthread_cond_broadcast(&dri2_surf->present_cond);
+   }
+   pthread_mutex_unlock(&dri2_surf->present_mtx);
+   return NULL;
+}
+
+static void
+droid_present_push(struct dri2_egl_surface *dri2_surf, struct ANativeWindowBuffer *buffer,
+                   void *fence)
+{
+   if (!dri2_surf->present_started) {
+      sigset_t all, saved;
+      sigfillset(&all);
+      pthread_sigmask(SIG_BLOCK, &all, &saved);
+      dri2_surf->present_started =
+         pthread_create(&dri2_surf->present_thread, NULL, droid_present_thread_main, dri2_surf) == 0;
+      pthread_sigmask(SIG_SETMASK, &saved, NULL);
+      if (!dri2_surf->present_started) {
+         /* No thread: present synchronously, as upstream does. */
+         struct dri2_egl_display *dri2_dpy = dri2_egl_display(dri2_surf->base.Resource.Display);
+         int fence_fd = -1;
+         if (fence) {
+            fence_fd = dri_get_fence_fd(dri2_dpy->dri_screen_render_gpu, fence);
+            dri_destroy_fence(dri2_dpy->dri_screen_render_gpu, fence);
+         }
+         ANativeWindow_queueBuffer(dri2_surf->window, buffer, fence_fd);
+         dri2_surf->async_present = false;
+         return;
+      }
+   }
+
+   pthread_mutex_lock(&dri2_surf->present_mtx);
+   while (dri2_surf->present_tail - dri2_surf->present_head >= 2)
+      pthread_cond_wait(&dri2_surf->present_cond, &dri2_surf->present_mtx);
+   const unsigned i = dri2_surf->present_tail % ARRAY_SIZE(dri2_surf->present_q);
+   dri2_surf->present_q[i].buffer = buffer;
+   dri2_surf->present_q[i].fence = fence;
+   dri2_surf->present_tail++;
+   pthread_cond_broadcast(&dri2_surf->present_cond);
+   pthread_mutex_unlock(&dri2_surf->present_mtx);
+}
+
+/* Wait until every handed-off buffer is queued. Anything else that talks to the window in an
+ * order-dependent way (swap interval, shared-buffer mode, teardown) calls this first. */
+static void
+droid_present_drain(struct dri2_egl_surface *dri2_surf)
+{
+   if (!dri2_surf->present_started)
+      return;
+   pthread_mutex_lock(&dri2_surf->present_mtx);
+   while (dri2_surf->present_head != dri2_surf->present_tail)
+      pthread_cond_wait(&dri2_surf->present_cond, &dri2_surf->present_mtx);
+   pthread_mutex_unlock(&dri2_surf->present_mtx);
+}
+
+static void
+droid_present_stop(struct dri2_egl_surface *dri2_surf)
+{
+   if (!dri2_surf->present_started)
+      return;
+   pthread_mutex_lock(&dri2_surf->present_mtx);
+   dri2_surf->present_quit = true;
+   pthread_cond_broadcast(&dri2_surf->present_cond);
+   pthread_mutex_unlock(&dri2_surf->present_mtx);
+   pthread_join(dri2_surf->present_thread, NULL);
+   dri2_surf->present_started = false;
+}
+
+/* On by default for radeonsi (only the Xclipse runs it on Android);
+ * MESA_XCLIPSE_ASYNC_PRESENT=0 or debug.mesa_xclipse_async_present 0 turns it off. */
+static bool
+droid_want_async_present(struct dri2_egl_display *dri2_dpy)
+{
+   if (!dri2_dpy->has_native_fence_fd || strcmp(dri2_dpy->driver_name, "radeonsi"))
+      return false;
+   const char *e = getenv("MESA_XCLIPSE_ASYNC_PRESENT");
+   char v[PROP_VALUE_MAX] = {0};
+   if (!(e && e[0]) && __system_property_get("debug.mesa_xclipse_async_present", v) > 0)
+      e = v;
+   return !(e && e[0] == '0');
+}
+
 static EGLBoolean
 droid_window_dequeue_buffer(struct dri2_egl_surface *dri2_surf)
 {
@@ -277,6 +433,7 @@ droid_window_dequeue_buffer(struct dri2_egl_surface *dri2_surf)
        * the color_buffers
        */
       for (int i = 0; i < dri2_surf->color_buffers_count; i++) {
+         droid_drop_cached_image(dri2_surf, i);
          dri2_surf->color_buffers[i].buffer = NULL;
          dri2_surf->color_buffers[i].age = 0;
       }
@@ -309,10 +466,7 @@ droid_window_enqueue_buffer(_EGLDisplay *disp,
    dri2_surf->buffer = NULL;
    dri2_surf->back = NULL;
 
-   if (dri2_surf->dri_image_back) {
-      dri2_destroy_image(dri2_surf->dri_image_back);
-      dri2_surf->dri_image_back = NULL;
-   }
+   droid_release_back_image(dri2_surf);
 
    return EGL_TRUE;
 }
@@ -347,6 +501,10 @@ droid_set_shared_buffer_mode(_EGLDisplay *disp, _EGLSurface *surf, bool mode)
    assert(_eglSurfaceHasMutableRenderBuffer(&dri2_surf->base));
 
    _eglLog(_EGL_DEBUG, "%s: mode=%d", __func__, mode);
+
+   /* Shared-buffer mode presents through droid_display_shared_buffer: go synchronous. */
+   droid_present_drain(dri2_surf);
+   dri2_surf->async_present = false;
 
    if (ANativeWindow_setSharedBufferMode(window, mode)) {
       _eglLog(_EGL_WARNING,
@@ -397,6 +555,14 @@ droid_create_surface(_EGLDisplay *disp, EGLint type, _EGLConfig *conf,
    if (!dri2_init_surface(&dri2_surf->base, disp, type, conf, attrib_list, true,
                           native_window))
       goto cleanup_surface;
+
+   if (type == EGL_WINDOW_BIT && droid_want_async_present(dri2_dpy)) {
+      /* The swap makes its own fence; the generic out-fence path stays off. */
+      dri2_surf->async_present = true;
+      dri2_surf->enable_out_fence = false;
+      pthread_mutex_init(&dri2_surf->present_mtx, NULL);
+      pthread_cond_init(&dri2_surf->present_cond, NULL);
+   }
 
    if (type == EGL_WINDOW_BIT) {
       int format;
@@ -523,6 +689,7 @@ droid_destroy_surface(_EGLDisplay *disp, _EGLSurface *surf)
    struct dri2_egl_surface *dri2_surf = dri2_egl_surface(surf);
 
    if (dri2_surf->base.Type == EGL_WINDOW_BIT) {
+      droid_present_stop(dri2_surf);
       if (dri2_surf->buffer)
          droid_window_cancel_buffer(dri2_surf);
 
@@ -531,12 +698,9 @@ droid_destroy_surface(_EGLDisplay *disp, _EGLSurface *surf)
       ANativeWindow_release(dri2_surf->window);
    }
 
-   if (dri2_surf->dri_image_back) {
-      _eglLog(_EGL_DEBUG, "%s : %d : destroy dri_image_back", __func__,
-              __LINE__);
-      dri2_destroy_image(dri2_surf->dri_image_back);
-      dri2_surf->dri_image_back = NULL;
-   }
+   droid_release_back_image(dri2_surf);
+   for (int i = 0; i < dri2_surf->color_buffers_count; i++)
+      droid_drop_cached_image(dri2_surf, i);
 
    if (dri2_surf->dri_image_front) {
       _eglLog(_EGL_DEBUG, "%s : %d : destroy dri_image_front", __func__,
@@ -561,6 +725,7 @@ droid_swap_interval(_EGLDisplay *disp, _EGLSurface *surf, EGLint interval)
    struct dri2_egl_surface *dri2_surf = dri2_egl_surface(surf);
    struct ANativeWindow *window = dri2_surf->window;
 
+   droid_present_drain(dri2_surf);
    if (ANativeWindow_setSwapInterval(window, interval))
       return EGL_FALSE;
 
@@ -576,6 +741,12 @@ update_buffers(struct dri2_egl_surface *dri2_surf)
 
    if (dri2_surf->base.Type != EGL_WINDOW_BIT)
       return 0;
+
+   /* Windows can cap the dequeued-buffer count at one, so the previous frame has to be queued
+    * first. Apps dequeue at their first draw into the window (games: the final blit), so the
+    * present thread has had most of a frame to finish. */
+   if (!dri2_surf->buffer)
+      droid_present_drain(dri2_surf);
 
    /* try to dequeue the next back buffer */
    if (!dri2_surf->buffer && !droid_window_dequeue_buffer(dri2_surf)) {
@@ -639,11 +810,24 @@ get_back_bo(struct dri2_egl_surface *dri2_surf)
          return -1;
       }
 
-      dri2_surf->dri_image_back =
-         droid_create_image_from_native_buffer(disp, dri2_surf->buffer, NULL);
-      if (!dri2_surf->dri_image_back) {
-         _eglLog(_EGL_WARNING, "failed to create DRI image from FD");
-         return -1;
+      const uint64_t ino = droid_buffer_dmabuf_ino(dri2_surf->buffer);
+      if (dri2_surf->back && dri2_surf->back->dri_image && ino &&
+          dri2_surf->back->dmabuf_ino == ino) {
+         dri2_surf->dri_image_back = dri2_surf->back->dri_image;
+      } else {
+         if (dri2_surf->back)
+            droid_drop_cached_image(dri2_surf, dri2_surf->back - dri2_surf->color_buffers);
+
+         dri2_surf->dri_image_back =
+            droid_create_image_from_native_buffer(disp, dri2_surf->buffer, NULL);
+         if (!dri2_surf->dri_image_back) {
+            _eglLog(_EGL_WARNING, "failed to create DRI image from FD");
+            return -1;
+         }
+         if (dri2_surf->back && ino) {
+            dri2_surf->back->dri_image = dri2_surf->dri_image_back;
+            dri2_surf->back->dmabuf_ino = ino;
+         }
       }
 
       handle_in_fence_fd(dri2_surf, dri2_surf->dri_image_back);
@@ -772,6 +956,27 @@ droid_swap_buffers(_EGLDisplay *disp, _EGLSurface *draw)
    if (dri2_surf->back)
       dri2_surf->back->age = 1;
 
+   if (dri2_surf->async_present && !dri2_dpy->pure_swrast) {
+      /* One asynchronous flush for the frame and its fence; the present thread exports the fence
+       * and queues the buffer. */
+      _EGLContext *ctx = _eglGetCurrentContext();
+      void *fence = dri_flush_swap_with_fence(dri2_egl_context(ctx)->dri_context,
+                                              dri2_surf->dri_drawable,
+                                              __DRI2_FLUSH_DRAWABLE |
+                                                 __DRI2_FLUSH_INVALIDATE_ANCILLARY,
+                                              __DRI2_NOTHROTTLE_SWAPBUFFER);
+      if (dri2_surf->buffer) {
+         droid_present_push(dri2_surf, dri2_surf->buffer, fence);
+         dri2_surf->buffer = NULL;
+         dri2_surf->back = NULL;
+         droid_release_back_image(dri2_surf);
+      } else if (fence) {
+         dri_destroy_fence(dri2_dpy->dri_screen_render_gpu, fence);
+      }
+      dri_invalidate_drawable(dri2_surf->dri_drawable);
+      goto swapped;
+   }
+
    dri2_flush_drawable_for_swapbuffers_flags(disp, draw,
                                              __DRI2_NOTHROTTLE_SWAPBUFFER);
 
@@ -792,6 +997,7 @@ droid_swap_buffers(_EGLDisplay *disp, _EGLSurface *draw)
       dri_invalidate_drawable(dri2_surf->dri_drawable);
    }
 
+swapped:
    /* Update the shared buffer mode */
    if (has_mutable_rb &&
        draw->ActiveRenderBuffer != draw->RequestedRenderBuffer) {
@@ -1065,10 +1271,7 @@ droid_display_shared_buffer(struct dri_drawable *driDrawable, int fence_fd,
       dri2_surf->buffer = NULL;
       dri2_surf->back = NULL;
 
-      if (dri2_surf->dri_image_back) {
-         dri2_destroy_image(dri2_surf->dri_image_back);
-         dri2_surf->dri_image_back = NULL;
-      }
+      droid_release_back_image(dri2_surf);
 
       dri_invalidate_drawable(dri2_surf->dri_drawable);
       return;

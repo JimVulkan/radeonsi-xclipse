@@ -1,7 +1,7 @@
 # RadeonSI for Samsung Xclipse
 
 A port of Mesa's RadeonSI OpenGL driver to Samsung Xclipse GPUs on Android, based on Mesa 26.2.3.
-It provides desktop OpenGL 4.6 and OpenGL ES through EGL. The Xclipse 920 (Exynos 2200) is
+It provides desktop OpenGL 4.6 and OpenGL ES through EGL. Currently only the Xclipse 920 (Exynos 2200) is
 supported.
 
 ## Requirements
@@ -55,6 +55,8 @@ Currently, the driver works only on the Xclipse 920. Other models are not compat
 |-----| `MESA_LOADER_DRIVER_OVERRIDE` | `radeonsi` selects this driver |
 | `debug.mesa_xclipse_present_probe` | `MESA_XCLIPSE_PRESENT_PROBE` | `n` logs what every n-th presented frame contains |
 | `debug.mesa_xclipse_hnd_dump` |-----| `1` logs each window buffer's gralloc handle |
+| `debug.mesa_xclipse_async_present` | `MESA_XCLIPSE_ASYNC_PRESENT` | `0` presents from the app thread instead of a helper thread |
+| `debug.mesa_xclipse_prof` | `MESA_XCLIPSE_PROF` | `<delay>,<seconds>` writes a CPU/GPU profile `mesa_prof_<pid>.txt` to `MESA_XCLIPSE_PROF_DIR` (else `$TMPDIR`) |
 
 ## Disclaimer
 

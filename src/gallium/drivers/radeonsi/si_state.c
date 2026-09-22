@@ -2256,6 +2256,14 @@ bool si_is_format_supported(struct pipe_screen *screen, enum pipe_format format,
       }
    }
 
+   /* Xclipse 920: ASTC LDR and ETC2/EAC decode in the texture unit, for sampling only (3D
+    * textures too: sliced ASTC, one 2D block layer per slice). */
+   if (ac_xclipse_native_texture_format(&sscreen->info, format)) {
+      if (target != PIPE_BUFFER && sample_count <= 1)
+         retval |= usage & PIPE_BIND_SAMPLER_VIEW;
+      return retval == usage;
+   }
+
    if (usage & (PIPE_BIND_SAMPLER_VIEW | PIPE_BIND_SHADER_IMAGE)) {
       if (target == PIPE_BUFFER) {
          retval |= si_is_vertex_format_supported(
@@ -2485,6 +2493,8 @@ static void si_set_framebuffer_state(struct pipe_context *ctx,
    uint8_t old_db_format_index = old_has_zsbuf ? sctx->framebuffer.zs.db_format_index : -1;
    bool old_gfx12_has_hiz = sctx->framebuffer.gfx12_has_hiz;
    int i;
+
+   si_xprof_pass_boundary(sctx, false, 0);
 
    /* Reject zero-sized framebuffers due to a hw bug on GFX6 that occurs
     * when PA_SU_HARDWARE_SCREEN_OFFSET != 0 and any_scissor.BR_X/Y <= 0.

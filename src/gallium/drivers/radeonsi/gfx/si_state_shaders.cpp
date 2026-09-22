@@ -3484,6 +3484,9 @@ static void si_bind_ps_shader(struct pipe_context *ctx, void *state)
    if (old_sel == sel)
       return;
 
+   /* Xclipse field profiler: a new pixel shader starts a new pass. */
+   si_xprof_pass_boundary(sctx, false, 0);
+
    sctx->shader.ps.cso = sel;
    sctx->shader.ps.current = (sel && sel->variants_count) ? sel->variants[0] : NULL;
 

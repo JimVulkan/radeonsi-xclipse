@@ -32,6 +32,7 @@ files_libradeonsi = files(
   'si_debug.c',
   'si_descriptors.c',
   'si_fence.c',
+  'si_xclipse_prof.c',
   'si_get.c',
   'si_gfx_cs.c',
   'si_gpu_load.c',

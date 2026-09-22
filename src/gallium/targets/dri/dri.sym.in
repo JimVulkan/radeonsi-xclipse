@@ -62,6 +62,7 @@
 		dri_create_fence;
 		dri_create_fence_fd;
 		dri_get_fence_fd;
+		dri_flush_swap_with_fence;
 		dri_get_fence_from_cl_event;
 		dri_destroy_fence;
 		dri_client_wait_sync;

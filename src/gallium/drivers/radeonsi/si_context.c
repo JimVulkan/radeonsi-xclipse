@@ -20,6 +20,7 @@ static void si_destroy_context(struct pipe_context *context)
 {
    struct si_context *sctx = (struct si_context *)context;
 
+   si_xprof_destroy(sctx);
    si_fini_gfx_context(sctx);
    si_fini_mm_context(sctx);
 

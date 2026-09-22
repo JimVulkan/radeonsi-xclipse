@@ -5,6 +5,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "util/u_xclipse_prof.h"
 #include <sys/ioctl.h>
 
 #include "amdgpu_cs.h"
@@ -457,6 +458,7 @@ void *amdgpu_bo_map(struct radeon_winsys *rws,
          }
 
          uint64_t end_time = os_time_get_nano();
+         u_xclipse_prof_wait(U_XCLIPSE_WAIT_BO, end_time - time);
 
          simple_mtx_lock(&aws->stats_lock);
          aws->buffer_wait_time += end_time - time;

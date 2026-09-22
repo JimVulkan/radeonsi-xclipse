@@ -54,6 +54,8 @@ bool
 dri2_validate_egl_image(struct dri_screen *screen, void *handle);
 void
 dri_image_fence_sync(struct dri_context *ctx, struct dri_image *img);
+void *
+dri_wrap_pipe_fence(struct dri_screen *driscreen, struct pipe_fence_handle *pipe_fence);
 #endif
 
 /* vim: set sw=3 ts=8 sts=3 expandtab: */

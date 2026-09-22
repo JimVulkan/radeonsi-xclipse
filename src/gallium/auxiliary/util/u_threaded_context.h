@@ -282,6 +282,11 @@ struct tc_unflushed_batch_token;
  */
 #define TC_MAX_SUBDATA_BYTES        320
 
+/* Texture uploads up to this size are copied into the batch instead of syncing the driver thread:
+ * a 32x32 RGBA8 sprite, the size of the per-tick animated-texture updates games do by the hundred.
+ * Well under a batch (TC_SLOTS_PER_BATCH * 8 bytes). */
+#define TC_MAX_TEXTURE_SUBDATA_BYTES 4096
+
 enum tc_binding_type {
    TC_BINDING_VERTEX_BUFFER,
    TC_BINDING_STREAMOUT_BUFFER,

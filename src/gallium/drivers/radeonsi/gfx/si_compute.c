@@ -843,6 +843,9 @@ static void si_launch_grid(struct pipe_context *ctx, const struct pipe_grid_info
    if (program->shader.compilation_failed)
       return;
 
+   si_xprof_pass_boundary(sctx, true,
+                          info->indirect ? 0 : info->grid[0] * info->grid[1] * info->grid[2]);
+
    si_check_dirty_buffers_textures(sctx);
 
    if (sctx->is_gfx_queue) {

@@ -13,8 +13,15 @@
 #include "util/hex.h"
 #include "util/u_cpu_detect.h"
 #include "util/u_screen.h"
+#include "util/detect_os.h"
+#include "util/log.h"
+#include "util/u_xclipse_prof.h"
 
 #include <sys/utsname.h>
+#if DETECT_OS_ANDROID
+#include <dlfcn.h>
+#include <unistd.h>
+#endif
 
 #if AMD_LLVM_AVAILABLE
 #include <llvm-c/TargetMachine.h>
@@ -76,6 +83,42 @@ parse_hex(char *out, const char *in, unsigned length)
    }
 }
 
+#if DETECT_OS_ANDROID
+/* Android disk shader cache on Samsung Xclipse. Upstream keeps it off on Android and apps have no
+ * HOME, so every launch recompiled every GLSL program and every shader variant. Directory: $TMPDIR
+ * (the app's cache dir on Android), else the directory this library was loaded from; /data/ only,
+ * because cache reads run on the compiling thread. MESA_SHADER_CACHE_DIR/DISABLE still win.
+ * Same policy as RADV on this chip. */
+static void si_xclipse_android_disk_cache(struct si_screen *sscreen)
+{
+   if (sscreen->info.pci_id != 0x73a0)
+      return;
+
+   char dir[512] = {0};
+   const char *how = "no writable app-private dir, cache stays off";
+   const char *t = getenv("TMPDIR");
+   if (t && !strncmp(t, "/data/", 6) && access(t, W_OK) == 0) {
+      snprintf(dir, sizeof(dir), "%s", t);
+      how = "TMPDIR";
+   } else {
+      Dl_info info;
+      if (dladdr((void *)si_xclipse_android_disk_cache, &info) && info.dli_fname &&
+          !strncmp(info.dli_fname, "/data/", 6)) {
+         snprintf(dir, sizeof(dir), "%s", info.dli_fname);
+         char *slash = strrchr(dir, '/');
+         if (slash)
+            *slash = '\0';
+         if (access(dir, W_OK) == 0)
+            how = "driver dir";
+         else
+            dir[0] = '\0';
+      }
+   }
+   disk_cache_set_default_dir(dir[0] ? dir : NULL);
+   mesa_logi("radeonsi: shader disk cache dir=%s (%s)", dir[0] ? dir : "NONE", how);
+}
+#endif
+
 static void si_disk_cache_create(struct si_screen *sscreen)
 {
    /* Don't use the cache if shader dumping is enabled. */
@@ -113,6 +156,9 @@ static void si_disk_cache_create(struct si_screen *sscreen)
    _mesa_blake3_final(&ctx, blake3);
    mesa_bytes_to_hex(cache_id, blake3, BLAKE3_KEY_LEN);
 
+#if DETECT_OS_ANDROID
+   si_xclipse_android_disk_cache(sscreen);
+#endif
    sscreen->disk_shader_cache = disk_cache_create(ac_get_family_name(sscreen->info.family),
                                                   cache_id, sscreen->info.address32_hi);
 }
@@ -418,7 +464,10 @@ static void si_init_shader_caps(struct si_screen *sscreen)
       /* We need F16C for fast FP16 conversions in glUniform.
        * It's supported since Intel Ivy Bridge and AMD Bulldozer.
        */
-      bool has_16bit_alu = sscreen->info.gfx_level >= GFX8 && util_get_cpu_caps()->has_f16c;
+      /* On aarch64 the conversions are done without F16C (slower, and only for 16-bit uniforms);
+       * the GPU side is what matters, and the Xclipse shader core has 16-bit ALUs. */
+      bool has_16bit_alu = sscreen->info.gfx_level >= GFX8 &&
+                           (util_get_cpu_caps()->has_f16c || sscreen->info.gfx11_shader_core);
 
       caps->fp16 = has_16bit_alu;
       caps->fp16_derivatives = has_16bit_alu;
@@ -899,6 +948,7 @@ bool si_init_gfx_screen(struct si_screen *sscreen) {
 #endif
 
    si_disk_cache_create(sscreen);
+   u_xclipse_prof_start();
 
    if (sscreen->use_aco && !support_aco) {
       mesa_loge("ACO does not support this chip yet");

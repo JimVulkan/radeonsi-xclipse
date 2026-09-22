@@ -74,6 +74,7 @@ struct zwp_linux_dmabuf_feedback_v1;
 #include <hardware/gralloc.h>
 
 #include "util/u_gralloc/u_gralloc.h"
+#include <pthread.h>
 
 #if ANDROID_API_LEVEL >= 26
 #include <vndk/window.h>
@@ -384,8 +385,25 @@ struct dri2_egl_surface {
    struct {
       struct ANativeWindowBuffer *buffer;
       int age;
+      /* The buffer's DRI image, kept across frames (window surfaces), and the inode of its
+       * dma-buf, which tells a reallocated buffer at a recycled address apart. */
+      struct dri_image *dri_image;
+      uint64_t dmabuf_ino;
    } *color_buffers, *back;
    uint32_t gralloc_usage;
+
+   /* Async present: exporting the out-fence and queueBuffer run on a per-surface thread, so
+    * eglSwapBuffers doesn't wait for the driver thread and the kernel submission. */
+   bool async_present;
+   bool present_started, present_quit;
+   pthread_t present_thread;
+   pthread_mutex_t present_mtx;
+   pthread_cond_t present_cond;
+   struct {
+      struct ANativeWindowBuffer *buffer;
+      void *fence;
+   } present_q[4];
+   unsigned present_head, present_tail;
 #endif
 
    /* surfaceless and device */

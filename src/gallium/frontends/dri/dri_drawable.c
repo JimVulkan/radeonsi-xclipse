@@ -30,8 +30,11 @@
  */
 
 #include "dri_screen.h"
+#include "util/os_time.h"
+#include "util/u_xclipse_prof.h"
 #include "dri_context.h"
 #include "dri_drawable.h"
+#include "dri_helpers.h"
 
 #include "pipe/p_screen.h"
 #include "util/format/u_format.h"
@@ -455,11 +458,50 @@ notify_before_flush_cb(void* _args)
  * \param flags             a combination of _DRI2_FLUSH_xxx flags
  * \param throttle_reason   the reason for throttling, 0 = no throttling
  */
+static void
+dri_flush_impl(struct dri_context *ctx,
+               struct dri_drawable *drawable,
+               unsigned flags,
+               enum __DRI2throttleReason reason,
+               struct pipe_fence_handle **present_fence);
+
+/* Xclipse field profiler: time the end-of-frame flush. */
 void
 dri_flush(struct dri_context *ctx,
           struct dri_drawable *drawable,
           unsigned flags,
           enum __DRI2throttleReason reason)
+{
+   if (likely(!u_xclipse_prof_active()) || !(flags & __DRI2_FLUSH_DRAWABLE)) {
+      dri_flush_impl(ctx, drawable, flags, reason, NULL);
+      return;
+   }
+   const int64_t t0 = os_time_get_nano();
+   dri_flush_impl(ctx, drawable, flags, reason, NULL);
+   u_xclipse_prof_wait(U_XCLIPSE_WAIT_SWAP, os_time_get_nano() - t0);
+}
+
+/* Android async present: the end-of-frame flush and the present fence in one flush that doesn't
+ * wait for the driver thread. The caller exports the fence's fd later (dri_get_fence_fd), off the
+ * app thread, and queues the buffer with it. Returns NULL if no fence could be made. */
+void *
+dri_flush_swap_with_fence(struct dri_context *ctx, struct dri_drawable *drawable,
+                          unsigned flags, enum __DRI2throttleReason reason)
+{
+   struct pipe_fence_handle *pf = NULL;
+   const int64_t t0 = u_xclipse_prof_active() ? os_time_get_nano() : 0;
+   dri_flush_impl(ctx, drawable, flags, reason, &pf);
+   if (t0)
+      u_xclipse_prof_wait(U_XCLIPSE_WAIT_SWAP, os_time_get_nano() - t0);
+   return pf ? dri_wrap_pipe_fence(ctx->screen, pf) : NULL;
+}
+
+static void
+dri_flush_impl(struct dri_context *ctx,
+               struct dri_drawable *drawable,
+               unsigned flags,
+               enum __DRI2throttleReason reason,
+               struct pipe_fence_handle **present_fence)
 {
    struct st_context *st;
    unsigned flush_flags;
@@ -522,6 +564,10 @@ dri_flush(struct dri_context *ctx,
          screen->fence_reference(screen, &drawable->throttle_fence, NULL);
       }
       drawable->throttle_fence = new_fence;
+   }
+   else if (present_fence) {
+      st_context_flush(st, flush_flags | ST_FLUSH_FENCE_FD | ST_FLUSH_ASYNC, present_fence,
+                       args.ctx ? notify_before_flush_cb : NULL, &args);
    }
    else if (flags & (__DRI2_FLUSH_DRAWABLE | __DRI2_FLUSH_CONTEXT)) {
       st_context_flush(st, flush_flags, NULL, args.ctx ? notify_before_flush_cb : NULL, &args);

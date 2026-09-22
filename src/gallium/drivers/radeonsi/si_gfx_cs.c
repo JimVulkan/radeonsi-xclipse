@@ -202,6 +202,8 @@ void si_flush_gfx_cs(struct si_context *ctx, unsigned flags, struct pipe_fence_h
    if (unlikely(ctx->sqtt))
       si_sqtt_describe_flush(ctx);
 
+   si_xprof_end_cs(ctx);
+
    /* Flush the CS. */
    ws->cs_flush(cs, flags, &ctx->last_gfx_fence);
 
@@ -561,6 +563,8 @@ void si_begin_new_gfx_cs(struct si_context *ctx, bool first_cs)
 
    if (!list_is_empty(&ctx->active_queries))
       si_resume_queries(ctx);
+
+   si_xprof_begin_cs(ctx);
 
    assert(!ctx->gfx_cs.prev_dw);
    ctx->initial_gfx_cs_size = ctx->gfx_cs.current.cdw;

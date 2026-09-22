@@ -24,6 +24,8 @@
  *
  **************************************************************************/
 
+#include "util/os_time.h"
+#include "util/u_xclipse_prof.h"
 #include "util/u_threaded_context.h"
 #include "util/u_cpu_detect.h"
 #include "util/format/u_format.h"
@@ -739,7 +741,10 @@ _tc_sync(struct threaded_context *tc, UNUSED const char *info, UNUSED const char
 
    /* Only wait for queued calls... */
    if (!util_queue_fence_is_signalled(&last->fence)) {
+      const int64_t t0 = u_xclipse_prof_active() ? os_time_get_nano() : 0;
       util_queue_fence_wait(&last->fence);
+      if (t0)
+         u_xclipse_prof_wait(U_XCLIPSE_WAIT_TC_SYNC, os_time_get_nano() - t0);
       synced = true;
    }
 
@@ -3306,7 +3311,7 @@ tc_texture_subdata(struct pipe_context *_pipe,
       ended = tc_check_fb_access(tc, NULL, resource);
 
    /* Small uploads can be enqueued, big uploads must sync. */
-   if (size <= TC_MAX_SUBDATA_BYTES) {
+   if (size <= TC_MAX_TEXTURE_SUBDATA_BYTES) {
       struct tc_texture_subdata *p =
          tc_add_slot_based_call(tc, TC_CALL_texture_subdata, tc_texture_subdata, size);
 

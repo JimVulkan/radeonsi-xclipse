@@ -20,6 +20,8 @@
  * OTHER DEALINGS IN THE SOFTWARE.
  */
 
+#include "util/os_time.h"
+#include "util/u_xclipse_prof.h"
 #include <dlfcn.h>
 #include "drm-uapi/drm_fourcc.h"
 #include "util/u_memory.h"
@@ -128,7 +130,10 @@ dri_create_fence_fd(struct dri_context *dri_ctx, int fd)
 
    if (fd == -1) {
       /* exporting driver created fence, flush: */
+      const int64_t t0 = u_xclipse_prof_active() ? os_time_get_nano() : 0;
       st_context_flush(st, ST_FLUSH_FENCE_FD, &fence->pipe_fence, NULL, NULL);
+      if (t0)
+         u_xclipse_prof_wait(U_XCLIPSE_WAIT_SWAP, os_time_get_nano() - t0);
    } else {
       /* importing a foreign fence fd: */
       ctx->create_fence_fd(ctx, &fence->pipe_fence, fd, PIPE_FD_TYPE_NATIVE_SYNC);
@@ -142,13 +147,31 @@ dri_create_fence_fd(struct dri_context *dri_ctx, int fd)
    return fence;
 }
 
+/* Takes the reference. */
+void *
+dri_wrap_pipe_fence(struct dri_screen *driscreen, struct pipe_fence_handle *pipe_fence)
+{
+   struct dri2_fence *fence = CALLOC_STRUCT(dri2_fence);
+   if (!fence) {
+      driscreen->base.screen->fence_reference(driscreen->base.screen, &pipe_fence, NULL);
+      return NULL;
+   }
+   fence->driscreen = driscreen;
+   fence->pipe_fence = pipe_fence;
+   return fence;
+}
+
 int
 dri_get_fence_fd(struct dri_screen *driscreen, void *_fence)
 {
    struct pipe_screen *screen = driscreen->base.screen;
    struct dri2_fence *fence = (struct dri2_fence*)_fence;
 
-   return screen->fence_get_fd(screen, fence->pipe_fence);
+   const int64_t t0 = u_xclipse_prof_active() ? os_time_get_nano() : 0;
+   const int fd = screen->fence_get_fd(screen, fence->pipe_fence);
+   if (t0)
+      u_xclipse_prof_wait(U_XCLIPSE_WAIT_SWAP, os_time_get_nano() - t0);
+   return fd;
 }
 
 void *
