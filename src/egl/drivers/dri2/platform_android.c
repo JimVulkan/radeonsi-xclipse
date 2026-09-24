@@ -32,6 +32,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <stdbool.h>
+#include <inttypes.h>
 #include <stdio.h>
 #include "util/libdrm.h"
 #include <sys/system_properties.h>
@@ -42,6 +43,7 @@
 #include "util/compiler.h"
 #include "util/libsync.h"
 #include "util/os_file.h"
+#include "util/os_misc.h"
 
 #include "main/glconfig.h"
 #include "egl_dri2.h"
@@ -146,14 +148,22 @@ droid_create_image_from_buffer_info(
    struct u_gralloc_buffer_basic_info *buf_info,
    struct u_gralloc_buffer_color_info *color_info, void *priv)
 {
-   unsigned error;
+   unsigned error = 0;
 
-   return dri2_from_dma_bufs(
+   struct dri_image *img = dri2_from_dma_bufs(
       dri2_dpy->dri_screen_render_gpu, width, height, buf_info->drm_fourcc,
       buf_info->modifier, buf_info->fds, buf_info->num_planes,
       buf_info->strides, buf_info->offsets, color_info->yuv_color_space,
       color_info->sample_range, color_info->horizontal_siting,
       color_info->vertical_siting, 0, &error, priv);
+   if (!img)
+      _eglLog(_EGL_WARNING,
+              "android: dma-buf import failed (error 0x%x): %dx%d fourcc 0x%x modifier 0x%" PRIx64
+              " planes %d fd %d stride %d offset %d",
+              error, width, height, buf_info->drm_fourcc, buf_info->modifier,
+              buf_info->num_planes, buf_info->fds[0], buf_info->strides[0],
+              buf_info->offsets[0]);
+   return img;
 }
 
 static bool
@@ -624,6 +634,11 @@ droid_create_surface(_EGLDisplay *disp, EGLint type, _EGLConfig *conf,
             ? GRALLOC_USAGE_SW_READ_OFTEN | GRALLOC_USAGE_SW_WRITE_OFTEN
             : GRALLOC_USAGE_HW_RENDER;
 
+      /* Arm's gralloc (kbase Malis) hands a render buffer back AFBC-compressed in a layout no
+       * driver can read; MALI_GRALLOC_USAGE_NO_AFBC (private bit 29) and composer usage keep it
+       * linear on both the Exynos and the MediaTek allocator (see panvk_android.c). */
+      if (loader_fd_is_kbase(dri2_dpy->fd_render_gpu))
+         dri2_surf->gralloc_usage |= (1u << 29) | GRALLOC_USAGE_HW_COMPOSER;
       /* Samsung gralloc gives a GPU+composer-only buffer a non-linear layout (a zero byte stride,
        * dimensions padded to 64) that the composer decodes as such, while the drivers here import
        * it as linear rows (the Samsung handle parser in u_gralloc_fallback), so the screen stays
@@ -1497,6 +1512,19 @@ droid_open_device(_EGLDisplay *disp, bool swrast)
       dev_list = _eglDeviceNext(dev_list);
    }
 
+   /* No DRM device: an Arm Mali on the stock kbase kernel driver has /dev/mali0 instead, which
+    * gallium panfrost drives through its kbase backend. */
+   if (dri2_dpy->fd_render_gpu < 0 && !swrast && !disp->Options.Zink) {
+      const char *node = os_get_option("MESA_KBASE_NODE");
+      dri2_dpy->fd_render_gpu = loader_open_device(node ? node : "/dev/mali0");
+      _eglLog(_EGL_DEBUG, "android: kbase node %s: fd %d", node ? node : "/dev/mali0",
+              dri2_dpy->fd_render_gpu);
+      if (dri2_dpy->fd_render_gpu >= 0 && !droid_probe_device(disp, false)) {
+         close(dri2_dpy->fd_render_gpu);
+         dri2_dpy->fd_render_gpu = -1;
+      }
+   }
+
    if (dri2_dpy->fd_render_gpu < 0) {
       _eglLog(_EGL_WARNING, "Failed to open %s DRM device",
               vendor_name ? "desired" : "any");
@@ -1547,7 +1575,9 @@ dri2_initialize_android(_EGLDisplay *disp)
 
    dri2_dpy->fd_display_gpu = dri2_dpy->fd_render_gpu;
 
-   if (!dri2_dpy->pure_swrast && !dri2_setup_device(disp, false)) {
+   /* A kbase node has no DRM device behind it to describe; it gets the software EGLDevice. */
+   if (!dri2_dpy->pure_swrast &&
+       !dri2_setup_device(disp, loader_fd_is_kbase(dri2_dpy->fd_render_gpu))) {
       err = "DRI2: failed to setup EGLDevice";
       goto cleanup;
    }

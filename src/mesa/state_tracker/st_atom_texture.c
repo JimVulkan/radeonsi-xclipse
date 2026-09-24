@@ -102,7 +102,6 @@ st_get_sampler_views(struct st_context *st,
    GLbitfield texel_fetch_samplers = prog->info.textures_used_by_txf[0];
    GLbitfield free_slots = ~prog->SamplersUsed;
    GLbitfield external_samplers_used = prog->ExternalSamplersUsed;
-   GLuint unit;
    *extra_sampler_views = 0;
 
    if (samplers_used == 0x0 && old_max == 0)
@@ -113,7 +112,7 @@ st_get_sampler_views(struct st_context *st,
       (prog->shader_program ? prog->shader_program->GLSL_Version : 0) >= 130;
 
    /* loop over sampler units (aka tex image units) */
-   for (unit = 0; unit < num_textures; unit++) {
+   for (GLuint unit = 0; unit < num_textures; unit++) {
       unsigned bit = BITFIELD_BIT(unit);
 
       if (!(samplers_used & bit)) {
@@ -187,7 +186,7 @@ st_get_sampler_views(struct st_context *st,
             break;
 
          /* we need one additional R8G8 view: */
-         tmpl.format = PIPE_FORMAT_R8G8_UNORM;
+         tmpl.format = PIPE_FORMAT_RG88_UNORM;
          tmpl.swizzle_g = PIPE_SWIZZLE_Y;   /* tmpl from Y plane is R8 */
          extra = u_bit_scan(&free_slots);
          sampler_views[extra] =
@@ -200,7 +199,7 @@ st_get_sampler_views(struct st_context *st,
             break;
 
          /* we need one additional R8G8 view: */
-         tmpl.format = PIPE_FORMAT_R8G8_UNORM;
+         tmpl.format = PIPE_FORMAT_RG88_UNORM;
          tmpl.swizzle_g = PIPE_SWIZZLE_Y;   /* tmpl from Y plane is R8 */
          extra = u_bit_scan(&free_slots);
          sampler_views[extra] =
@@ -213,7 +212,7 @@ st_get_sampler_views(struct st_context *st,
             break;
 
          /* we need one additional R8G8 view: */
-         tmpl.format = PIPE_FORMAT_R8G8_UNORM;
+         tmpl.format = PIPE_FORMAT_RG88_UNORM;
          tmpl.swizzle_g = PIPE_SWIZZLE_Y;   /* tmpl from Y plane is R8 */
          extra = u_bit_scan(&free_slots);
          sampler_views[extra] =
@@ -224,7 +223,7 @@ st_get_sampler_views(struct st_context *st,
       case PIPE_FORMAT_NV24:
       case PIPE_FORMAT_NV42:
          /* we need one additional R8G8 view: */
-         tmpl.format = PIPE_FORMAT_R8G8_UNORM;
+         tmpl.format = PIPE_FORMAT_RG88_UNORM;
          tmpl.swizzle_g = PIPE_SWIZZLE_Y;   /* tmpl from Y plane is R8 */
          extra = u_bit_scan(&free_slots);
          sampler_views[extra] =
@@ -287,8 +286,8 @@ st_get_sampler_views(struct st_context *st,
             /* no additional views needed */
             break;
 
-         /* we need one additional B8G8R8A8 view: */
-         tmpl.format = PIPE_FORMAT_B8G8R8A8_UNORM;
+         /* we need one additional BGRA8888 view: */
+         tmpl.format = PIPE_FORMAT_BGRA8888_UNORM;
          tmpl.swizzle_b = PIPE_SWIZZLE_Z;
          tmpl.swizzle_a = PIPE_SWIZZLE_W;
          extra = u_bit_scan(&free_slots);
@@ -303,8 +302,8 @@ st_get_sampler_views(struct st_context *st,
             /* no additional views needed */
             break;
 
-         /* we need one additional R8G8B8A8 view: */
-         tmpl.format = PIPE_FORMAT_R8G8B8A8_UNORM;
+         /* we need one additional RGBA8888 view: */
+         tmpl.format = PIPE_FORMAT_RGBA8888_UNORM;
          tmpl.swizzle_b = PIPE_SWIZZLE_Z;
          tmpl.swizzle_a = PIPE_SWIZZLE_W;
          extra = u_bit_scan(&free_slots);

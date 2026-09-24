@@ -1267,6 +1267,21 @@ zink_init_screen_caps(struct zink_screen *screen)
 
    /* Vulkan supports only 4 byte clears */
    caps->hw_clear_buffer_sizes = 4;
+
+   switch (screen->info.props.deviceType) {
+   case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU:
+      caps->device_type = PIPE_DEVICE_TYPE_INTEGRATED_GPU;
+      break;
+   case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU:
+      caps->device_type = PIPE_DEVICE_TYPE_DISCRETE_GPU;
+      break;
+   case VK_PHYSICAL_DEVICE_TYPE_CPU:
+      caps->device_type = PIPE_DEVICE_TYPE_CPU;
+      break;
+   default:
+      caps->device_type = PIPE_DEVICE_TYPE_UNKNOWN;
+      break;
+   }
 }
 
 static VkSampleCountFlagBits
@@ -1800,6 +1815,14 @@ choose_pdev(struct zink_screen *screen, int64_t dev_major, int64_t dev_minor, ui
       else
          idx = zink_get_display_device(screen, pdev_count, pdevs, dev_major,
                                        dev_minor);
+      /* Not all Vulkan implementations expose DRM device information through
+       * VK_EXT_physical_device_drm. When DRM matching is requested with a
+       * valid render node and only a single Vulkan physical device is
+       * available, select that device rather than failing due to the lack
+       * of DRM metadata.
+       */
+      if (idx == -1 && !adapter_luid && !cpu && pdev_count == 1)
+         idx = 0;
 
       if (idx != -1)
          /* valid cpu device */
@@ -1859,7 +1882,7 @@ update_queue_props(struct zink_screen *screen)
       mesa_loge("ZINK: failed to allocate props!");
       return;
    }
-      
+
    VKSCR(GetPhysicalDeviceQueueFamilyProperties)(screen->pdev, &num_queues, props);
 
    bool found_gfx = false;

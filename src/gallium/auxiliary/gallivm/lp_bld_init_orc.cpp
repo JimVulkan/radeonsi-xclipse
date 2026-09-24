@@ -258,8 +258,7 @@ public:
    static void remove_jd(LLVMOrcJITDylibRef jd) {
       using llvm::orc::ExecutionSession;
       using llvm::orc::JITDylib;
-      if (!jit) return;
-      auto& es = jit->lljit->getExecutionSession();
+      auto& es = LPJit::get_instance()->lljit->getExecutionSession();
       ExitOnErr(es.removeJITDylib(* ::unwrap(jd)));
    }
 
@@ -300,7 +299,6 @@ LPJit* LPJit::jit = NULL;
 void lpjit_exit()
 {
    delete LPJit::jit;
-   LPJit::jit = nullptr;
 }
 
 LLVMErrorRef module_transform(void *Ctx, LLVMModuleRef mod) {

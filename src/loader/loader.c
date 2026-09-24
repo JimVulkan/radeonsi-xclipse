@@ -128,8 +128,7 @@ bool
 amd_predicate(int fd, const char *driver)
 {
    char *kernel_driver = loader_get_kernel_driver_name(fd);
-   bool ret = kernel_driver &&
-              (strcmp(kernel_driver, "amdgpu") == 0 || strcmp(kernel_driver, "radeon") == 0);
+   bool ret = kernel_driver && (strcmp(kernel_driver, "amdgpu") == 0);
 
    free(kernel_driver);
    return ret;
@@ -776,6 +775,18 @@ out:
    return driver;
 }
 
+bool
+loader_fd_is_kbase(int fd)
+{
+   char link[64], path[PATH_MAX];
+   snprintf(link, sizeof(link), "/proc/self/fd/%d", fd);
+   const ssize_t n = readlink(link, path, sizeof(path) - 1);
+   if (n <= 0)
+      return false;
+   path[n] = 0;
+   return strncmp(path, "/dev/mali", 9) == 0;
+}
+
 char *
 loader_get_driver_for_fd(int fd)
 {
@@ -797,6 +808,11 @@ loader_get_driver_for_fd(int fd)
    if (driver)
       return driver;
 #endif
+
+   /* Arm's kbase node (/dev/mali0) is not a DRM device: drmGetVersion on it fails on some kernels
+    * and returns garbage on others. Gallium panfrost drives it through its kbase backend. */
+   if (loader_fd_is_kbase(fd))
+      return strdup("panfrost");
 
    driver = loader_get_pci_driver(fd);
    if (!driver)

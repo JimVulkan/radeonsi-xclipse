@@ -44,6 +44,7 @@ u_init_pipe_screen_caps(struct pipe_screen *pscreen, int accel)
 
    caps->accelerated = accel;
    caps->graphics = true;
+   caps->fragment_shader_depth = true;
    caps->gl_clamp = true;
    caps->max_render_targets = true;
    caps->mixed_colorbuffer_formats = true;
@@ -82,6 +83,7 @@ u_init_pipe_screen_caps(struct pipe_screen *pscreen, int accel)
 
    caps->max_viewports = 1;
 
+   caps->device_type = accel ? PIPE_DEVICE_TYPE_UNKNOWN : PIPE_DEVICE_TYPE_CPU;
    caps->endianness = PIPE_ENDIAN_LITTLE;
 
    /* All new drivers should support persistent/coherent mappings. This CAP

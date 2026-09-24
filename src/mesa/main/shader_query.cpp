@@ -1919,14 +1919,6 @@ _mesa_get_program_interfaceiv(struct gl_shader_program *shProg,
    }
 }
 
-static inline bool
-is_gl_builtin_from_spirv(const struct gl_shader_variable *var)
-{
-   /* All variables from SPIR-V do not have a name, and 7.4.2 guarantees that
-    * built-ins do not have Location decorations. */
-   return !var->name.string && !var->explicit_location;
-}
-
 static bool
 validate_io(struct gl_program *producer, struct gl_program *consumer)
 {
@@ -1980,7 +1972,7 @@ validate_io(struct gl_program *producer, struct gl_program *consumer)
        *
        *    Built-in inputs or outputs do not affect interface matching.
        */
-      if (is_gl_identifier(var->name.string) || is_gl_builtin_from_spirv(var))
+      if (is_gl_identifier(var->name.string))
          continue;
 
       outputs[num_outputs++] = var;
@@ -1997,8 +1989,7 @@ validate_io(struct gl_program *producer, struct gl_program *consumer)
       gl_shader_variable const *const consumer_var = RESOURCE_VAR(res);
       gl_shader_variable const *producer_var = NULL;
 
-      if (is_gl_identifier(consumer_var->name.string) ||
-          is_gl_builtin_from_spirv(consumer_var))
+      if (is_gl_identifier(consumer_var->name.string))
          continue;
 
       /* Inputs with explicit locations match other outputs with explicit

@@ -2,9 +2,9 @@ RadeonSI for Samsung Xclipse -- third-party notices
 ===================================================
 
 libEGL_mesa.so, libGLESv2_mesa.so and libgallium_dri.so are built from radeonsi-xclipse, a
-subset of the Mesa 3D Graphics Library 26.2.3 with changes by JimVulkan. The components below
-are compiled into them. Each is followed by its copyright holders; the license texts are at
-the end of this file.
+subset of the Mesa 3D Graphics Library 26.3.0-devel with changes by JimVulkan. The components
+below are compiled into them. Each is followed by its copyright holders; the license texts are
+at the end of this file.
 
 Mesa 3D Graphics Library (EGL, the OpenGL/OpenGL ES frontend, the GLSL compiler, NIR, ACO,
 RadeonSI, Zink, softpipe, Gallium and utilities)
