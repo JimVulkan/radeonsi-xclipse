@@ -56,8 +56,9 @@ The driver works on the Xclipse 920 and the Xclipse 530. Other models are not co
 | `debug.mesa_xclipse_present_probe` | `MESA_XCLIPSE_PRESENT_PROBE` | `n` logs what every n-th presented frame contains |
 | `debug.mesa_xclipse_hnd_dump` |-----| `1` logs each window buffer's gralloc handle |
 | `debug.mesa_xclipse_async_present` | `MESA_XCLIPSE_ASYNC_PRESENT` | `0` presents from the app thread instead of a helper thread |
-| `debug.mesa_xclipse_prof` | `MESA_XCLIPSE_PROF` | `<delay>,<seconds>` writes a CPU/GPU profile `mesa_prof_<pid>.txt` to `MESA_XCLIPSE_PROF_DIR` (else `$TMPDIR`) |
-| `debug.mesa_xclipse_dcc` | `MESA_XCLIPSE_DCC` | render target compression (DCC): `1` on, `0` off; on by default on the Xclipse 530 only |
+| `debug.mesa_xclipse_prof` | `MESA_XCLIPSE_PROF` | `<delay>,<seconds>` writes a CPU/GPU profile `mesa_prof_<pid>.txt` to `MESA_XCLIPSE_PROF_DIR` (else `$TMPDIR`). `t,<seconds>` instead profiles `<seconds>` each time `debug.mesa_xclipse_prof_go` changes (`t,<seconds>,g` without CPU sampling), writes to `debug.mesa_xclipse_prof_dir` if set, and also prints the summary to logcat (tag `XPROF`) |
+| `debug.mesa_xclipse_dcc` | `MESA_XCLIPSE_DCC` | `0` turns off render target compression (DCC) |
+| `debug.mesa_xclipse_w32ps` | `MESA_XCLIPSE_W32PS` | `0` runs pixel shaders in Wave64 again (Wave32 by default) |
 
 ## Disclaimer
 
